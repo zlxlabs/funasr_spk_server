@@ -308,6 +308,14 @@ class TranscriptionConfig(BaseModel):
     # 默认 7200(2h)。delete_after_transcription off 时 sweeper 整体不跑。
     orphan_file_grace_seconds: int = 7200
 
+    # ===== FunASR segment 合并视图（serve 投影层，issue #1）=====
+    # 缓存存句级真值；JSON 出口对 funasr 结果做「同说话人相邻句合并」视图。
+    # gap: 相邻句间隔 < 此值才可并（秒）。原 funasr_transcriber 硬编码 3.0 收编到此。
+    # max_span: 合并后累计跨度上限（秒）；超限在句边界断开。<=0 关闭上限（旧无 cap 行为）。
+    # env: FUNASR_SEGMENT_MERGE_GAP_SEC / FUNASR_SEGMENT_MERGE_MAX_SPAN_SEC
+    segment_merge_gap_sec: float = 3.0
+    segment_merge_max_span_sec: float = 120.0
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -599,6 +607,9 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "upload_session_ttl_seconds", "FUNASR_UPLOAD_SESSION_TTL_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_max_count", "FUNASR_UPLOAD_SESSION_MAX_COUNT", int)
         cls._override_if_set(config_data["transcription"], "orphan_file_grace_seconds", "FUNASR_ORPHAN_FILE_GRACE_SECONDS", int)
+        # FunASR segment 合并视图（serve 投影层）
+        cls._override_if_set(config_data["transcription"], "segment_merge_gap_sec", "FUNASR_SEGMENT_MERGE_GAP_SEC", float)
+        cls._override_if_set(config_data["transcription"], "segment_merge_max_span_sec", "FUNASR_SEGMENT_MERGE_MAX_SPAN_SEC", float)
 
         # ==================== Database 配置 ====================
         cls._override_if_set(config_data["database"], "max_cache_days", "FUNASR_MAX_CACHE_DAYS", int)

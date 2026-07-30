@@ -116,6 +116,23 @@ class TestBuildResultMetadata:
         )
         assert md["word_align"] is False
 
+    def test_funasr_json_echoes_segment_merge_max_span(self):
+        """D5: funasr + JSON 出口 metadata 带 segment_merge_max_span_sec."""
+        from src.core.config import config
+        md = build_result_metadata(
+            engine="funasr", options=TranscribeOptions(), output_format="json",
+        )
+        assert md["segment_merge_max_span_sec"] == config.transcription.segment_merge_max_span_sec
+
+    def test_qwen3_and_srt_no_segment_merge_key(self):
+        """未应用 merge 视图的出口不带该键."""
+        md_q = build_result_metadata(engine="qwen3", options=TranscribeOptions())
+        assert "segment_merge_max_span_sec" not in md_q
+        md_srt = build_result_metadata(
+            engine="funasr", options=TranscribeOptions(), output_format="srt",
+        )
+        assert "segment_merge_max_span_sec" not in md_srt
+
     def test_defaults(self, wa_off):
         md = build_result_metadata(engine="qwen3", options=TranscribeOptions())
         assert md["diarize"] is True

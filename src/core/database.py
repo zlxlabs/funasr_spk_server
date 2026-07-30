@@ -16,7 +16,11 @@ from pathlib import Path
 from loguru import logger
 from pydantic import ValidationError
 from src.core.config import config
-from src.core.result_projection import project_result_nospk, segments_to_srt_text
+from src.core.result_projection import (
+    merge_segments_view,
+    project_result_nospk,
+    segments_to_srt_text,
+)
 from src.models.schemas import TranscriptionResult
 
 
@@ -374,6 +378,15 @@ class DatabaseManager:
                 if output_format == "json":
                     result_data = json.loads(result_json)
                     result = TranscriptionResult(**result_data)
+                    # D3: funasr 行 JSON 出口先 merge 视图 (句级→合并, 带 span cap),
+                    # 再 nospk。顺序铁律: merge 需要 speaker; 反序会把 null speaker 全并成一条.
+                    # 以行的 engine 列判定, 不看请求; qwen3 家族 (含折维 tag) 一律不过.
+                    if cached_engine == "funasr":
+                        result.segments = merge_segments_view(
+                            result.segments,
+                            gap_sec=config.transcription.segment_merge_gap_sec,
+                            max_span_sec=config.transcription.segment_merge_max_span_sec,
+                        )
                     if nospk:
                         # 出口投影 (D8): 投影回退行 / funasr diarized 行 → 抹 speaker.
                         # projected=True 表示"由 diarized 行投影而来"; exact nospk 行
@@ -388,6 +401,8 @@ class DatabaseManager:
                     if nospk:
                         # nospk SRT: 旁路 raw 路径 (funasr raw 会渲染出 SpeakerN: 前缀),
                         # 从投影 segments 重渲染无前缀 (D8 + T-D #4 渲染点).
+                        # **不过 merge 视图** — SRT 语义是原始分割; 句级直接渲染
+                        # (canonical 改句级后从粗变细是预期修正).
                         result_data = json.loads(result_json)
                         tr = TranscriptionResult(**result_data)
                         was_projected = bool(tr.speakers)

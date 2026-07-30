@@ -1,12 +1,16 @@
-"""nospk 输出投影 — 把 diarized TranscriptionResult 投影成无说话人区分形态
+"""serve 层输出投影 — nospk 抹 speaker + funasr segment 合并视图
 
-设计定案 D3+T-A: 纯函数, 引擎代码零改动. 应用点两个 (双出口):
+设计定案 D3+T-A (nospk) + issue #1 (segment merge):
+纯函数, 缓存永远只存真算结果 (句级 / diarized), 有损视图在出口做.
+
+应用点两个 (双出口):
 1. db_manager.get_cached_result 出口 — 覆盖 websocket_handler 早返回
    (upload_request / chunked finalize) + task_manager 缓存读;
    E1: qwen3 nospk 请求 exact tag miss → 同引擎同 wa-tag diarized 行现场投影
    (标 projected:true, **不回写** — 缓存里永远只有真算结果, T2);
    funasr 免折维行 (D4) 本身 diarized, 出口投影一行通吃.
-2. task_manager fresh 结果出口 — funasr 照算后投影给客户端, 缓存仍存 diarized 原结果.
+   funasr JSON 行: 先 merge_segments_view 再 nospk (顺序铁律).
+2. task_manager fresh 结果出口 — funasr 先存句级再 merge 视图 (+ 可选 nospk).
 
 对外契约 (D8): diarize=false ⇒ segments[].speaker=null + speakers=[] +
 SRT 无 "SpeakerN:" 前缀. words / 时间 / 文本不动.
@@ -29,7 +33,8 @@ def build_result_metadata(
 ) -> dict:
     """E2 effective options 回显块 (serve 层组装, 不入库).
 
-    字段: engine / diarize / word_align / language / projected (+ 可选 word_align_error).
+    字段: engine / diarize / word_align / language / projected
+    (+ 可选 word_align_error / segment_merge_max_span_sec).
     合并优先级 (E2 定义): request > 分片 session 回填 > config > 引擎默认 —
     request 与 session 回填已在 TranscribeOptions 收拢 (resolve_word_align 在构造 options
     时解析 effective word_align), 本函数只做 options 与引擎默认的合并:
@@ -43,6 +48,8 @@ def build_result_metadata(
       config.qwen3.word_align_language (与缓存折维同一规范化规则)
     - projected: 请求级属性 — 本响应是否由 diarized 结果投影而来
     - word_align_error: 仅当请求词级但失败时附上 (fresh 出口; 缓存命中无此键)
+    - segment_merge_max_span_sec: funasr + JSON 出口应用了 merge 视图时回显生效 cap 值;
+      其它出口 (qwen3 / SRT) 不带该键
     """
     from src.core.config import config
 
@@ -60,6 +67,9 @@ def build_result_metadata(
     }
     if word_align_error:
         md["word_align_error"] = word_align_error
+    # D5: 仅 funasr JSON 应用 merge 视图的出口回显 cap（SRT/qwen3 不带）
+    if engine == "funasr" and output_format == "json":
+        md["segment_merge_max_span_sec"] = config.transcription.segment_merge_max_span_sec
     return md
 
 
@@ -86,6 +96,51 @@ def cache_hit_metadata(cached_result, *, engine, options, output_format):
         engine=engine, options=options, output_format=output_format, projected=projected,
     )
     return md, projected, True
+
+
+def merge_segments_view(
+    segments: List[TranscriptionSegment],
+    *,
+    gap_sec: float,
+    max_span_sec: float,
+) -> List[TranscriptionSegment]:
+    """同说话人相邻句合并视图 (纯函数, 不 mutate 输入).
+
+    三条全满足才并: 同 speaker AND next.start - cur.end < gap_sec
+    AND next.end - cur.start <= max_span_sec.
+    max_span_sec <= 0 ⇒ 不设时长上限 (仅 gap/speaker).
+    单句自身超 cap 原样保留, 绝不切句内 (投影只并不切).
+    文本拼接保留标点: cur.text + next.text (与历史 FunASR 引擎层合并一致).
+    对旧缓存已合并行天然幂等: 无「同 speaker 且 gap 小」相邻对则不产生新巨段.
+    """
+    if not segments:
+        return []
+
+    merged: List[TranscriptionSegment] = []
+    current = segments[0].model_copy(deep=True)
+
+    for next_seg in segments[1:]:
+        time_gap = next_seg.start_time - current.end_time
+        span = next_seg.end_time - current.start_time
+        same_speaker = current.speaker == next_seg.speaker
+        gap_ok = time_gap < gap_sec
+        span_ok = max_span_sec <= 0 or span <= max_span_sec
+
+        if same_speaker and gap_ok and span_ok:
+            current = TranscriptionSegment(
+                start_time=current.start_time,
+                end_time=next_seg.end_time,
+                text=current.text + next_seg.text,
+                speaker=current.speaker,
+                # funasr 路径无 words; 不跨句发明词级时间戳
+                words=None,
+            )
+        else:
+            merged.append(current)
+            current = next_seg.model_copy(deep=True)
+
+    merged.append(current)
+    return merged
 
 
 def project_result_nospk(result: TranscriptionResult) -> TranscriptionResult:

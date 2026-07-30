@@ -333,7 +333,7 @@ class FunASRTranscriber:
                     "segments": self._parse_and_merge_segments(result),
                 }
             else:
-                # JSON格式：原有逻辑，合并相同说话人的连续句子
+                # JSON格式：canonical 句级 segments（合并视图在 serve 投影层）
                 segments = self._parse_and_merge_segments(result)
                 
                 # 提取说话人列表
@@ -368,11 +368,16 @@ class FunASRTranscriber:
             raise Exception(f"转录失败: {str(e)}")
     
     def _parse_and_merge_segments(self, result: Any) -> List[TranscriptionSegment]:
-        """解析FunASR结果并合并相同说话人的连续句子"""
-        segments = []
-        
+        """解析 FunASR 结果为句级 segments（canonical 真值）.
+
+        同说话人相邻句合并已迁到 serve 投影层 ``merge_segments_view``
+        （见 result_projection / issue #1）; 本方法只解析 sentence_info，
+        时间戳全部保留测量值进缓存。方法名历史遗留，语义已是 parse-only。
+        """
+        segments: List[TranscriptionSegment] = []
+
         logger.debug(f"解析结果 - 输入类型: {type(result)}, 内容: {result}")
-        
+
         # 处理结果格式
         if isinstance(result, list):
             if len(result) > 0:
@@ -385,98 +390,41 @@ class FunASRTranscriber:
         else:
             logger.warning(f"未知的结果格式: {type(result)}")
             return segments
-        
+
         logger.debug(f"使用数据，键: {list(result_data.keys()) if isinstance(result_data, dict) else 'N/A'}")
-        
-        # 检查是否有sentence_info（这是成功转录的标志）
+
+        # 检查是否有 sentence_info（成功转录的标志）
         if 'sentence_info' not in result_data:
             logger.warning("结果中没有sentence_info字段，可能转录失败")
             return segments
-        
+
         sentences = result_data.get('sentence_info', [])
         logger.info(f"找到 {len(sentences)} 个句子片段")
-        
-        # 解析每个句子
-        raw_segments = []
+
         for sentence in sentences:
             # 提取时间戳（毫秒转秒）
             start_time = sentence.get('start', 0) / 1000.0
             end_time = sentence.get('end', 0) / 1000.0
-            
-            # 提取文本
+
             text = sentence.get('text', '').strip()
-            
+
             # 提取说话人 - 使用 Speaker1, Speaker2 格式
             speaker_id = sentence.get('spk', 0)
             if isinstance(speaker_id, int):
                 speaker = f"Speaker{speaker_id + 1}"
             else:
                 speaker = "Speaker1"
-            
+
             if text:  # 只添加非空文本
-                segment = TranscriptionSegment(
+                segments.append(TranscriptionSegment(
                     start_time=round(start_time, 2),
                     end_time=round(end_time, 2),
                     text=text,
-                    speaker=speaker
-                )
-                raw_segments.append(segment)
-        
-        # 合并相同说话人的连续句子（可选，根据需求）
-        if self._should_merge_segments():
-            segments = self._merge_consecutive_segments(raw_segments)
-        else:
-            segments = raw_segments
-        
-        logger.info(f"最终生成 {len(segments)} 个转录片段")
+                    speaker=speaker,
+                ))
+
+        logger.info(f"最终生成 {len(segments)} 个句级转录片段（合并在 serve 投影层）")
         return segments
-    
-    def _should_merge_segments(self) -> bool:
-        """判断是否应该合并片段 - 启用相同说话人连续句子的合并"""
-        # 启用合并功能，将相同说话人的连续句子合并
-        return True
-    
-    def _merge_consecutive_segments(self, segments: List[TranscriptionSegment]) -> List[TranscriptionSegment]:
-        """合并相同说话人的连续句子"""
-        if not segments:
-            return segments
-        
-        merged = []
-        current = segments[0]
-        
-        logger.debug(f"开始合并 {len(segments)} 个片段")
-        
-        for i in range(1, len(segments)):
-            next_seg = segments[i]
-            
-            # 检查是否为同一说话人且时间间隔较短（小于3秒）
-            time_gap = next_seg.start_time - current.end_time
-            
-            logger.debug(f"片段 {i}: {current.speaker} -> {next_seg.speaker}, 时间间隔: {time_gap:.2f}s")
-            
-            if (current.speaker == next_seg.speaker and 
-                time_gap < 3.0):  # 增加到3秒的间隔阈值
-                # 合并文本和时间 - 保留所有标点符号
-                merged_text = current.text + next_seg.text
-                current = TranscriptionSegment(
-                    start_time=current.start_time,
-                    end_time=next_seg.end_time,
-                    text=merged_text,
-                    speaker=current.speaker
-                )
-                logger.debug(f"合并片段: {merged_text[:20]}...")
-            else:
-                # 添加当前片段，开始新的片段
-                merged.append(current)
-                logger.debug(f"完成片段: [{current.speaker}] {current.text[:20]}...")
-                current = next_seg
-        
-        # 添加最后一个片段
-        merged.append(current)
-        logger.debug(f"完成片段: [{current.speaker}] {current.text[:20]}...")
-        
-        logger.info(f"合并完成: {len(segments)} -> {len(merged)} 个片段")
-        return merged
     
     def _generate_srt_from_raw_result(self, result: Any) -> str:
         """从原始FunASR结果生成SRT格式字符串"""
