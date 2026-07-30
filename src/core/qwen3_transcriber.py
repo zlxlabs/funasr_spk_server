@@ -323,12 +323,17 @@ def apply_short_segment_guard_to_segments(
         }
         for s in merged_segments
     ]
+    # max_span_sec: 防单人独白滚成巨段 (issue #1 防御收口); 与 funasr serve 投影共用
+    # config.transcription.segment_merge_max_span_sec. 默认 120s; 函数签名默认 0=无上限
+    # 保持单元测试/旧调用行为不变.
+    from src.core.config import config as _cfg
     out_dicts, stats = apply_short_segment_guard(
         seg_dicts,
         enabled=True,
         short_drop_sec=qwen3_config.short_segment_drop_sec,
         aba_max_mid_sec=qwen3_config.short_segment_aba_max_mid_sec,
         merge_same=qwen3_config.short_segment_merge_same,
+        max_span_sec=_cfg.transcription.segment_merge_max_span_sec,
     )
     # 转回 Segment (speaker str -> int, words 透传)
     out_segments = [

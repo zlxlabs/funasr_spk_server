@@ -256,6 +256,40 @@ class TestMergeConsecutiveSameSpeaker:
         assert len(out) == 2
         assert merged == 0
 
+    def test_max_span_sec_zero_no_cap(self) -> None:
+        """max_span_sec=0 (默认) 无上限, 长跨度仍合并 — 保持历史行为."""
+        from src.core.qwen3.postprocess import merge_consecutive_same_speaker
+
+        segments = [
+            _seg(0.0, 50.0, "0", "一"),
+            _seg(50.0, 100.0, "0", "二"),
+            _seg(100.0, 200.0, "0", "三"),
+        ]
+        out, merged = merge_consecutive_same_speaker(
+            segments, merge_gap_sec=0.05, max_span_sec=0.0,
+        )
+        assert len(out) == 1
+        assert out[0]["text"] == "一二三"
+        assert merged == 2
+
+    def test_max_span_sec_breaks_long_monologue(self) -> None:
+        """max_span_sec>0 时累计跨度超限在段边界断开."""
+        from src.core.qwen3.postprocess import merge_consecutive_same_speaker
+
+        segments = [
+            _seg(0.0, 50.0, "0", "一"),
+            _seg(50.0, 100.0, "0", "二"),
+            _seg(100.0, 150.0, "0", "三"),  # span from 0 would be 150 > 120
+        ]
+        out, merged = merge_consecutive_same_speaker(
+            segments, merge_gap_sec=0.05, max_span_sec=120.0,
+        )
+        assert len(out) == 2
+        assert out[0]["text"] == "一二"
+        assert out[0]["end"] == 100.0
+        assert out[1]["text"] == "三"
+        assert merged == 1
+
 
 class TestApplyShortSegmentGuard:
     """apply_short_segment_guard: 入口函数, 串联 drop_tiny / aba / merge_same."""
