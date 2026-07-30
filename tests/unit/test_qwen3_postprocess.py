@@ -342,3 +342,45 @@ class TestApplyShortSegmentGuard:
         out, stats = apply_short_segment_guard(segments, merge_same=False)
         assert len(out) == 2
         assert stats.get("merge") is None or stats["merge"].get("merged", 0) == 0
+
+
+class TestApplyShortSegmentGuardToSegmentsMaxSpanWiring:
+    """D6 接线: wrapper 读 config.transcription.segment_merge_max_span_sec 并透传."""
+
+    def test_wrapper_applies_config_max_span_sec(self, monkeypatch) -> None:
+        """monkeypatch cap=60 → 长独白在段边界断开; cap=0 → 不断开全并."""
+        from src.core.config import Qwen3Config, config
+        from src.core.qwen3.merge import Segment
+        from src.core.qwen3_transcriber import apply_short_segment_guard_to_segments
+
+        cfg = Qwen3Config(
+            short_segment_guard_enabled=True,
+            short_segment_drop_sec=0.5,  # 不 drop 长段
+            short_segment_aba_max_mid_sec=1.5,
+            short_segment_merge_same=True,
+        )
+        # 单说话人连续独白: 0-30 + 30-55 (span 55≤60 可并) + 55-90 (span 90>60 断开)
+        segs = [
+            Segment(start=0.0, end=30.0, speaker=0, text="一"),
+            Segment(start=30.0, end=55.0, speaker=0, text="二"),
+            Segment(start=55.0, end=90.0, speaker=0, text="三"),
+        ]
+
+        monkeypatch.setattr(config.transcription, "segment_merge_max_span_sec", 60.0)
+        out_cap, stats_cap = apply_short_segment_guard_to_segments(segs, cfg)
+        assert len(out_cap) == 2
+        assert out_cap[0].text == "一二"
+        assert out_cap[0].start == 0.0
+        assert out_cap[0].end == 55.0
+        assert out_cap[1].text == "三"
+        assert out_cap[1].start == 55.0
+        assert out_cap[1].end == 90.0
+        assert stats_cap.get("merge", {}).get("merged", 0) == 1
+
+        monkeypatch.setattr(config.transcription, "segment_merge_max_span_sec", 0.0)
+        out_nocap, stats_nocap = apply_short_segment_guard_to_segments(segs, cfg)
+        assert len(out_nocap) == 1
+        assert out_nocap[0].text == "一二三"
+        assert out_nocap[0].start == 0.0
+        assert out_nocap[0].end == 90.0
+        assert stats_nocap.get("merge", {}).get("merged", 0) == 2

@@ -112,28 +112,25 @@ class TestMergeSegmentsView:
         assert [(s.start_time, s.end_time, s.text, s.speaker) for s in segs] == originals
 
     def test_idempotent_on_already_merged_input(self):
-        """旧缓存已合并形态: 相邻同 speaker 必 gap>=3s 或不同 speaker → 过一遍不产生新巨段."""
+        """已合并形态过投影幂等: 可合并输入先 merge 得 len==1, 再过一遍字段完全相等."""
         segs = [
-            _seg(0.0, 100.0, "已合并大段A"),
-            _seg(105.0, 200.0, "已合并大段B"),  # gap=5s > 3
+            _seg(0.0, 1.0, "A"),
+            _seg(1.2, 2.0, "B"),  # gap=0.2 < 3, span 不超 cap
+            _seg(2.1, 3.0, "C"),
         ]
         out1 = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
+        assert len(out1) == 1
+        assert out1[0].text == "ABC"
         out2 = merge_segments_view(out1, gap_sec=3.0, max_span_sec=120.0)
-        assert len(out1) == 2
-        assert len(out2) == 2
-        assert out1[0].text == out2[0].text
-        assert out1[1].text == out2[1].text
+        assert len(out2) == 1
+        assert out1[0].model_dump() == out2[0].model_dump()
 
     def test_span_equal_to_cap_still_merges(self):
         """next.end - cur.start == max_span_sec 仍可合并（<= 条件）."""
-        segs = [
-            _seg(0.0, 50.0, "一"),
-            _seg(60.0, 120.0, "二"),  # span = 120, gap = 10 but gap_sec would need be >10
-        ]
-        # gap=10 >= 3 → actually gap breaks. Use small gap:
+        # span=120, gap=0.5 < 3 → 同 speaker 可并
         segs = [
             _seg(0.0, 60.0, "一"),
-            _seg(60.5, 120.0, "二"),  # span=120, gap=0.5
+            _seg(60.5, 120.0, "二"),
         ]
         out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
         assert len(out) == 1
