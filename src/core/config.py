@@ -307,6 +307,11 @@ class TranscriptionConfig(BaseModel):
     # 引用的文件才删。必须 >> task_max_processing_seconds(确保 worker 早读完, 避 unlink-under-worker)。
     # 默认 7200(2h)。delete_after_transcription off 时 sweeper 整体不跑。
     orphan_file_grace_seconds: int = 7200
+    # 维护循环推送终态通知的单次超时上限（秒）。对端停读导致 TCP 背压时
+    # await websocket.send 会阻塞；超时视为该客户端不可达，跳过继续处理下一个
+    # 任务，绝不阻塞维护循环（看门狗 / 终态淘汰 / 孤儿文件 sweeper）。
+    # 可通过 FUNASR_MAINTENANCE_NOTIFY_TIMEOUT_SEC 覆盖。
+    maintenance_notify_timeout_sec: float = 5.0
 
     # ===== FunASR segment 合并视图（serve 投影层，issue #1）=====
     # 缓存存句级真值；JSON 出口对 funasr 结果做「同说话人相邻句合并」视图。
@@ -607,6 +612,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "upload_session_ttl_seconds", "FUNASR_UPLOAD_SESSION_TTL_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_max_count", "FUNASR_UPLOAD_SESSION_MAX_COUNT", int)
         cls._override_if_set(config_data["transcription"], "orphan_file_grace_seconds", "FUNASR_ORPHAN_FILE_GRACE_SECONDS", int)
+        cls._override_if_set(config_data["transcription"], "maintenance_notify_timeout_sec", "FUNASR_MAINTENANCE_NOTIFY_TIMEOUT_SEC", float)
         # FunASR segment 合并视图（serve 投影层）
         cls._override_if_set(config_data["transcription"], "segment_merge_gap_sec", "FUNASR_SEGMENT_MERGE_GAP_SEC", float)
         cls._override_if_set(config_data["transcription"], "segment_merge_max_span_sec", "FUNASR_SEGMENT_MERGE_MAX_SPAN_SEC", float)

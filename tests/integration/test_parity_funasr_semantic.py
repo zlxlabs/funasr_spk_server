@@ -52,6 +52,21 @@ def force_lock_mode():
     config.transcription.concurrency_mode = original
 
 
+@pytest.fixture(scope="session", autouse=True)
+def force_funasr_engine():
+    """强制 default_engine=funasr。
+
+    resolve_transcriber("funasr") 会拒绝 engine != config 默认引擎的请求，而
+    dev 环境 .env 可能写死 qwen3。本文件断言的是 FunASR 引擎行为，不该依赖
+    环境的引擎配置。
+    """
+    from src.core.config import config
+    original = config.transcription.default_engine
+    config.transcription.default_engine = "funasr"
+    yield
+    config.transcription.default_engine = original
+
+
 @pytest.fixture(autouse=True)
 def reset_transcriber_singleton():
     """每个测试前重置 transcriber 单例，避免状态串扰"""

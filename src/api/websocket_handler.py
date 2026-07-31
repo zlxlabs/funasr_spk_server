@@ -497,6 +497,29 @@ class WebSocketHandler:
                 except Exception as e:
                     logger.error(f"发送进度通知失败: {e}")
                     self._cleanup_connection(conn_id)
+
+    async def notify_task_error(
+        self, task_id: str, error_type: str, message: str, status: str
+    ):
+        """向任务连接推送显式 error 终态通知，避免客户端继续等待进度消息。"""
+        connection_ids = self.task_connections.get(task_id, set())
+        for conn_id in list(connection_ids):
+            if conn_id in self.connections:
+                websocket = self.connections[conn_id]
+                try:
+                    await self._send_message(
+                        websocket,
+                        "error",
+                        ErrorResponse(
+                            error=error_type,
+                            message=message,
+                            task_id=task_id,
+                            details={"status": status},
+                        ).model_dump(),
+                    )
+                except Exception as e:
+                    logger.error(f"发送任务错误通知失败: {e}")
+                    self._cleanup_connection(conn_id)
     
     async def notify_task_complete(self, task_id: str, result: dict):
         """通知任务完成"""

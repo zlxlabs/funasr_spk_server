@@ -443,7 +443,7 @@ class TaskManager:
             logger.debug(f"内存清理: 清除 {evicted} 个终态任务, 剩余 {len(self.tasks)}")
         return evicted
 
-    def _terminalize_stale_processing(self) -> int:
+    def _terminalize_stale_processing(self) -> List[TranscriptionTask]:
         """看门狗：把卡死的 PROCESSING 任务强制终态化为 TIMED_OUT。
 
         防 ASR 卡死 / worker 异常逃逸导致任务永远 PROCESSING → 永不被清 + 客户端轮询
@@ -452,11 +452,11 @@ class TaskManager:
 
         注：本方法只改任务状态（内存 + 客户端可见性），不强杀在途的 worker await
         （真正卡死的 worker 槽位回收需 worker 级取消，超本轮止血范围）。
-        返回终态化数量。
+        返回本轮被终态化的任务列表，供锁外发送终态通知。
         """
         limit = config.transcription.task_max_processing_seconds
         now = datetime.now()
-        n = 0
+        timed_out_tasks = []
         for task in self.tasks.values():
             if task.status != TaskStatus.PROCESSING:
                 continue
@@ -467,9 +467,9 @@ class TaskManager:
                 task.completed_at = now
                 self._record_terminal(TaskStatus.TIMED_OUT)  # 终态化点 5: 看门狗
                 self.record_error(ErrorKind.TIMEOUT.value)
-                n += 1
+                timed_out_tasks.append(task)
                 logger.warning(f"看门狗终态化卡死任务: {task.task_id}")
-        return n
+        return timed_out_tasks
 
     async def _sweep_orphan_upload_files(self) -> int:
         """孤儿上传文件 sweeper(P4 A2):删 upload_dir 里 mtime 超宽限期 且 无 live 引用的文件。
@@ -535,8 +535,30 @@ class TaskManager:
             try:
                 await asyncio.sleep(interval)
                 async with self._queue_lock:
-                    self._terminalize_stale_processing()
+                    timed_out_tasks = self._terminalize_stale_processing()
                     self._evict_terminal_tasks()
+
+                # 终态通知必须在队列锁外发送，避免网络 I/O 阻塞提交/维护；单条失败
+                # 也不能阻止同一轮的其它超时任务继续收到通知。
+                # 对端停读时 websocket.send 会因 TCP 背压无限阻塞——单例维护循环
+                # 绝不能被拖死（看门狗/淘汰/孤儿 sweeper 全停），故单次通知加超时。
+                timeout = config.transcription.maintenance_notify_timeout_sec
+                for task in timed_out_tasks:
+                    try:
+                        await asyncio.wait_for(
+                            self._notify_task_failed(
+                                task, kind=ErrorKind.TIMEOUT.value
+                            ),
+                            timeout=timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"看门狗终态通知超时({timeout}s)，跳过 {task.task_id} —— "
+                            f"客户端可能已停止读取；维护循环继续"
+                        )
+                    except Exception as e:
+                        logger.error(f"看门狗终态通知失败 {task.task_id}: {e}")
+
                 # 孤儿 sweeper 在锁外做文件 I/O(引用集内部快照即可一致), 不阻塞队列
                 await self._sweep_orphan_upload_files()
             except asyncio.CancelledError:
@@ -811,7 +833,7 @@ class TaskManager:
                 if not kind.retryable:
                     logger.warning(f"任务 {task_id} 遇到不可重试的错误({kind.value}): {error_msg}")
                 # 通知失败
-                await self._notify_task_failed(task)
+                await self._notify_task_failed(task, kind=kind.value)
                 
                 # 删除文件（F1: 统一走 _maybe_delete_task_file）
                 await self._maybe_delete_task_file(task, reason="任务失败，")
@@ -867,8 +889,8 @@ class TaskManager:
         except Exception as e:
             logger.error(f"通知任务完成失败: {e}")
     
-    async def _notify_task_failed(self, task: TranscriptionTask):
-        """通知任务失败"""
+    async def _notify_task_failed(self, task: TranscriptionTask, kind: str | None = None):
+        """保留 progress 失败通知，并追加显式 error 终态通知。"""
         try:
             from src.api.websocket_handler import ws_handler
             await ws_handler.notify_task_progress(
@@ -878,7 +900,18 @@ class TaskManager:
                 message=f"任务失败: {task.error}"
             )
         except Exception as e:
-            logger.error(f"通知任务失败失败: {e}")
+            logger.error(f"通知任务失败进度消息失败: {e}")
+
+        try:
+            from src.api.websocket_handler import ws_handler
+            await ws_handler.notify_task_error(
+                task_id=task.task_id,
+                error_type=kind or "task_failed",
+                message=task.error or "任务失败",
+                status=task.status.value,
+            )
+        except Exception as e:
+            logger.error(f"通知任务失败终态消息失败: {e}")
     
     def _convert_json_to_srt(self, result: TranscriptionResult) -> str:
         """将JSON格式的转录结果转换为SRT格式"""
