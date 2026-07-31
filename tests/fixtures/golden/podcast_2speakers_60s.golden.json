@@ -2,38 +2,104 @@
   "segments": [
     {
       "start_time": 0.11,
+      "end_time": 0.35,
+      "text": "法，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 0.59,
+      "end_time": 3.05,
+      "text": "我觉得我们首先就先来聊一聊关于生日的事儿吧。",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 3.05,
+      "end_time": 4.17,
+      "text": "咱们先来回忆回忆，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 4.31,
       "end_time": 9.19,
-      "text": "法，我觉得我们首先就先来聊一聊关于生日的事儿吧。咱们先来回忆回忆，你还有印象自己从小到大记忆当中第一个生日是什么样吗？",
+      "text": "你还有印象自己从小到大记忆当中第一个生日是什么样吗？",
       "speaker": "Speaker1"
     },
     {
       "start_time": 9.31,
+      "end_time": 10.39,
+      "text": "我跟你讲说出来，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 10.39,
+      "end_time": 11.17,
+      "text": "你可能不信，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 11.39,
+      "end_time": 17.07,
+      "text": "就是我小时候过生日的记忆就跟就是歘就是被清零了一样哦，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 17.35,
       "end_time": 18.87,
-      "text": "我跟你讲说出来，你可能不信，就是我小时候过生日的记忆就跟就是歘就是被清零了一样哦，就是我完全没有印象。",
+      "text": "就是我完全没有印象。",
       "speaker": "Speaker2"
     },
     {
       "start_time": 19.05,
+      "end_time": 20.85,
+      "text": "所以你以前可能就遇到过那个黑衣人，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 20.85,
+      "end_time": 22.23,
+      "text": "就拿出一根笔说，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 22.23,
       "end_time": 24.51,
-      "text": "所以你以前可能就遇到过那个黑衣人，就拿出一根笔说，看这里刷一闪你就都没了。",
+      "text": "看这里刷一闪你就都没了。",
       "speaker": "Speaker1"
     },
     {
       "start_time": 24.51,
+      "end_time": 25.89,
+      "text": "然后我还特别怕你骄傲，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 26.11,
       "end_time": 27.99,
-      "text": "然后我还特别怕你骄傲，就是我我我有什么可骄傲的，",
+      "text": "就是我我我有什么可骄傲的，",
       "speaker": "Speaker2"
     },
     {
       "start_time": 27.99,
+      "end_time": 28.65,
+      "text": "你没有记忆，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 28.65,
       "end_time": 28.99,
-      "text": "你没有记忆，我骄傲。",
+      "text": "我骄傲。",
       "speaker": "Speaker1"
     },
     {
       "start_time": 28.99,
+      "end_time": 31.63,
+      "text": "不就是我现在觉得我好像能回溯到的，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 31.63,
       "end_time": 36.39,
-      "text": "不就是我现在觉得我好像能回溯到的，我最有记忆的最完整记忆的那个生日是跟你过的哦，",
+      "text": "我最有记忆的最完整记忆的那个生日是跟你过的哦，",
       "speaker": "Speaker2"
     },
     {
@@ -44,14 +110,80 @@
     },
     {
       "start_time": 37.23,
+      "end_time": 37.47,
+      "text": "对，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 37.47,
+      "end_time": 42.53,
+      "text": "就是你给我过的可能就是因为我从小生日都不是很有仪式感哦，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 42.69,
+      "end_time": 45.31,
+      "text": "但是你跟我在一起之后哦，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 45.31,
+      "end_time": 47.01,
+      "text": "这个人就是太浪漫了，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 47.05,
+      "end_time": 47.85,
+      "text": "就能整活啊。",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 47.85,
+      "end_time": 48.09,
+      "text": "对，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 48.09,
+      "end_time": 49.87,
+      "text": "然后跟我在一起之后，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 49.87,
+      "end_time": 53.31,
+      "text": "你给我过的那个第一个生日实在是就是太颠覆我了，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 53.31,
+      "end_time": 55.37,
+      "text": "所以我就印象很深刻，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 55.55,
       "end_time": 56.37,
-      "text": "对，就是你给我过的可能就是因为我从小生日都不是很有仪式感哦，但是你跟我在一起之后哦，这个人就是太浪漫了，就能整活啊。对，然后跟我在一起之后，你给我过的那个第一个生日实在是就是太颠覆我了，所以我就印象很深刻，我都有点没印象。",
+      "text": "我都有点没印象。",
       "speaker": "Speaker2"
     },
     {
       "start_time": 56.37,
+      "end_time": 57.23,
+      "text": "我给你过第一个生日，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 57.23,
+      "end_time": 57.81,
+      "text": "怎么颠覆你，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 57.81,
       "end_time": 58.98,
-      "text": "我给你过第一个生日，怎么颠覆你，我当时裸奔我了。",
+      "text": "我当时裸奔我了。",
       "speaker": "Speaker1"
     }
   ],
