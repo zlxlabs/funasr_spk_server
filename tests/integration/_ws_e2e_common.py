@@ -7,6 +7,7 @@ NOTE: test_qwen3_server_websocket_e2e.py 目前仍有一份自带的平行 helpe
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -18,6 +19,14 @@ try:
     import websockets
 except ImportError:  # pragma: no cover
     websockets = None
+
+
+# 可被调用方覆盖的超时常量（默认值覆盖 handshake / 长音频结果等待）
+HANDSHAKE_TIMEOUT_SEC = 30.0   # connected / upload_request 应答 / 分片 ack
+RESULT_TIMEOUT_SEC = 900.0     # 等转录结果（长音频用例可能跑十几分钟）
+
+# 服务端失败终态走 task_progress(status=failed|timed_out|cancelled)，不是独立消息类型
+TERMINAL_FAILURE_STATUSES = {"failed", "timed_out", "cancelled"}
 
 
 def free_port() -> int:
@@ -52,6 +61,17 @@ def file_hash_md5(path: Path) -> str:
     return h.hexdigest()
 
 
+async def _recv_json(ws, timeout: float, what: str) -> dict:
+    """带超时的 recv + json 解析。超时抛 AssertionError 而非永久挂起。"""
+    try:
+        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise AssertionError(
+            f"等待 {what} 超时 ({timeout}s) —— 服务端未发终态消息"
+        ) from None
+    return json.loads(raw)
+
+
 async def client_upload_and_wait(
     ws_url: str,
     audio: Path,
@@ -83,11 +103,11 @@ async def client_upload_and_wait(
         request_data.update(extra_request)
 
     async with websockets.connect(ws_url, max_size=200 * 1024 * 1024) as ws:
-        connected = json.loads(await ws.recv())
+        connected = await _recv_json(ws, HANDSHAKE_TIMEOUT_SEC, "connected")
         assert connected.get("type") == "connected", f"unexpected: {connected}"
 
         await ws.send(json.dumps({"type": "upload_request", "data": request_data}))
-        resp = json.loads(await ws.recv())
+        resp = await _recv_json(ws, HANDSHAKE_TIMEOUT_SEC, "upload_request 应答")
         if resp["type"] == "error":
             return {"ok": False, "error": resp["data"]["message"], "wall_time": time.time() - t0}
         if resp["type"] == "task_complete":
@@ -106,8 +126,16 @@ async def client_upload_and_wait(
         }))
 
         while True:
-            msg = json.loads(await ws.recv())
+            msg = await _recv_json(ws, RESULT_TIMEOUT_SEC, f"task {task_id} 终态")
             if msg["type"] == "task_progress":
+                status = (msg.get("data") or {}).get("status")
+                if status in TERMINAL_FAILURE_STATUSES:
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "error": (msg.get("data") or {}).get("message") or status,
+                        "wall_time": time.time() - t0,
+                    }
                 continue
             if msg["type"] == "task_complete":
                 return {
@@ -164,12 +192,12 @@ async def client_chunked_upload_and_wait(
         request_data.update(extra_request)
 
     async with websockets.connect(ws_url, max_size=200 * 1024 * 1024) as ws:
-        connected = json.loads(await ws.recv())
+        connected = await _recv_json(ws, HANDSHAKE_TIMEOUT_SEC, "connected")
         assert connected.get("type") == "connected", f"unexpected: {connected}"
 
         # 1. 发起分片会话 (upload_request + upload_mode=chunked)
         await ws.send(json.dumps({"type": "upload_request", "data": request_data}))
-        resp = json.loads(await ws.recv())
+        resp = await _recv_json(ws, HANDSHAKE_TIMEOUT_SEC, "chunked upload_request 应答")
         if resp["type"] == "error":
             return {"ok": False, "error": resp["data"]["message"],
                     "wall_time": time.time() - t0}
@@ -187,7 +215,9 @@ async def client_chunked_upload_and_wait(
                     "chunk_hash": hashlib.md5(chunk).hexdigest(),
                 },
             }))
-            ack = json.loads(await ws.recv())  # 逐片 ack, 一般是 chunk_received
+            ack = await _recv_json(
+                ws, HANDSHAKE_TIMEOUT_SEC, f"chunk {idx}/{total_chunks} ack"
+            )
             if ack["type"] == "error":
                 return {"ok": False, "task_id": task_id, "error": ack["data"]["message"],
                         "num_chunks": total_chunks, "wall_time": time.time() - t0}
@@ -197,9 +227,20 @@ async def client_chunked_upload_and_wait(
         #    再(稍后)推 task_complete。据此区分 (chunk_received 是逐片 ack, 忽略)。
         saw_progress = False
         while True:
-            msg = json.loads(await ws.recv())
+            msg = await _recv_json(ws, RESULT_TIMEOUT_SEC, f"task {task_id} 终态")
             mtype = msg["type"]
-            if mtype == "chunk_received" or mtype == "task_progress":
+            if mtype == "chunk_received":
+                continue
+            if mtype == "task_progress":
+                status = (msg.get("data") or {}).get("status")
+                if status in TERMINAL_FAILURE_STATUSES:
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "error": (msg.get("data") or {}).get("message") or status,
+                        "num_chunks": total_chunks,
+                        "wall_time": time.time() - t0,
+                    }
                 continue
             if mtype in ("upload_complete", "task_queued"):
                 saw_progress = True
