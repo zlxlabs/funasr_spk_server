@@ -30,6 +30,7 @@ def build_result_metadata(
     projected: bool = False,
     has_words: bool = None,
     word_align_error: str = None,
+    segment_merge_applied: bool = None,
 ) -> dict:
     """E2 effective options 回显块 (serve 层组装, 不入库).
 
@@ -48,8 +49,11 @@ def build_result_metadata(
       config.qwen3.word_align_language (与缓存折维同一规范化规则)
     - projected: 请求级属性 — 本响应是否由 diarized 结果投影而来
     - word_align_error: 仅当请求词级但失败时附上 (fresh 出口; 缓存命中无此键)
-    - segment_merge_max_span_sec: funasr + JSON 出口应用了 merge 视图时回显生效 cap 值;
-      其它出口 (qwen3 / SRT) 不带该键
+    - segment_merge_max_span_sec: **实际过了 merge 视图** 的 JSON 出口才回显 cap.
+      · segment_merge_applied is None (fresh 默认): 按 engine==funasr 推断
+        (fresh 时 task.engine 与是否应用一致)
+      · 显式 bool (缓存命中): 跟 get_cached_result 通道事实, 不跟请求 engine
+        (跨引擎回退时请求 engine 与行 engine 可分离)
     """
     from src.core.config import config
 
@@ -67,8 +71,12 @@ def build_result_metadata(
     }
     if word_align_error:
         md["word_align_error"] = word_align_error
-    # D5: 仅 funasr JSON 应用 merge 视图的出口回显 cap（SRT/qwen3 不带）
-    if engine == "funasr" and output_format == "json":
+    # cap 键存在 == 本响应 segments 实际过了 merge 视图
+    if segment_merge_applied is None:
+        show_cap = engine == "funasr" and output_format == "json"
+    else:
+        show_cap = bool(segment_merge_applied) and output_format == "json"
+    if show_cap:
         md["segment_merge_max_span_sec"] = config.transcription.segment_merge_max_span_sec
     return md
 
@@ -76,24 +84,29 @@ def build_result_metadata(
 def cache_hit_metadata(cached_result, *, engine, options, output_format):
     """缓存命中出口共享纯逻辑 (3 处去重: ws 整文件 / ws 分片 / task_manager.submit).
 
-    把 "projected 提取 + metadata 构建 + SRT-dict 有效性判断" 这段被抄 3 份的逻辑收拢成
-    一个**无副作用**纯函数. 返回 (metadata, projected, srt_ok):
+    把 "projected / segment_merge_applied 提取 + metadata 构建 + SRT-dict 有效性判断"
+    这段被抄 3 份的逻辑收拢成一个**无副作用**纯函数. 返回 (metadata, projected, srt_ok):
     - metadata: build_result_metadata 的结果 (srt_ok=False 时为 None)
     - projected: 该缓存是否由 diarized 投影而来 (回显用)
     - srt_ok: SRT 请求时缓存是否为合法 srt-dict; False ⇒ 调用方应跳过缓存继续处理
 
     codex #7/#8 定的边界: 统一用 get 不 pop (绝不改 cached_result); 控制流 (set task /
     计数 / 发消息 / 排除 projected key 不泄漏给客户端) 仍由各出口自理, 本函数只组装数据.
+    segment_merge_applied 与 projected 同通道 (JSON: result.metadata; SRT 不应用 merge).
     """
     if output_format == "srt":
         srt_ok = isinstance(cached_result, dict) and cached_result.get("format") == "srt"
         if not srt_ok:
             return None, False, False
         projected = bool(cached_result.get("projected", False))  # get 不 pop
+        merge_applied = False  # SRT 出口不过 merge 视图
     else:
-        projected = bool((cached_result.metadata or {}).get("projected"))
+        meta = cached_result.metadata or {}
+        projected = bool(meta.get("projected"))  # get 不 pop
+        merge_applied = bool(meta.get("segment_merge_applied"))
     md = build_result_metadata(
         engine=engine, options=options, output_format=output_format, projected=projected,
+        segment_merge_applied=merge_applied,
     )
     return md, projected, True
 
@@ -106,9 +119,12 @@ def merge_segments_view(
 ) -> List[TranscriptionSegment]:
     """同说话人相邻句合并视图 (纯函数, 不 mutate 输入).
 
-    三条全满足才并: 同 speaker AND next.start - cur.end < gap_sec
-    AND next.end - cur.start <= max_span_sec.
-    max_span_sec <= 0 ⇒ 不设时长上限 (仅 gap/speaker).
+    合并条件 (全满足才并):
+      同 speaker AND next.start >= current.start (乱序守卫)
+      AND next.start - cur.end < gap_sec
+      AND next.end - cur.start <= max_span_sec (max_span_sec<=0 不设上限).
+    合并 end_time = max(cur.end, next.end) — 嵌套/重叠不收缩丢失时间.
+    乱序 (next.start < cur.start) → 断开另起, 不并出倒置区间.
     单句自身超 cap 原样保留, 绝不切句内 (投影只并不切).
     文本拼接保留标点: cur.text + next.text (与历史 FunASR 引擎层合并一致).
     对旧缓存已合并行天然幂等: 无「同 speaker 且 gap 小」相邻对则不产生新巨段.
@@ -120,6 +136,12 @@ def merge_segments_view(
     current = segments[0].model_copy(deep=True)
 
     for next_seg in segments[1:]:
+        # 乱序守卫: next 起点早于 current 起点 → 不合并, 直接断开
+        if next_seg.start_time < current.start_time:
+            merged.append(current)
+            current = next_seg.model_copy(deep=True)
+            continue
+
         time_gap = next_seg.start_time - current.end_time
         span = next_seg.end_time - current.start_time
         same_speaker = current.speaker == next_seg.speaker
@@ -129,7 +151,7 @@ def merge_segments_view(
         if same_speaker and gap_ok and span_ok:
             current = TranscriptionSegment(
                 start_time=current.start_time,
-                end_time=next_seg.end_time,
+                end_time=max(current.end_time, next_seg.end_time),
                 text=current.text + next_seg.text,
                 speaker=current.speaker,
                 # funasr 路径无 words; 不跨句发明词级时间戳

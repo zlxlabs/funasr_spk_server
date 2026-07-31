@@ -143,6 +143,26 @@ class TestCacheHitMetadata:
         assert srt_ok is False
         assert md is None
 
+    def test_json_cap_key_from_segment_merge_applied_channel_not_request_engine(self):
+        """P2: cap 键跟通道 segment_merge_applied, 不跟请求 engine 推断.
+        请求 qwen3 但通道标已 merge → 带 cap; 请求 funasr 但未 merge → 不带.
+        """
+        from src.core.config import config
+
+        r_merged = make_diarized_result("h")
+        r_merged.metadata = {"segment_merge_applied": True}
+        md, _, _ = cache_hit_metadata(
+            r_merged, engine="qwen3", options=SPK, output_format="json",
+        )
+        assert md["segment_merge_max_span_sec"] == config.transcription.segment_merge_max_span_sec
+
+        r_raw = make_diarized_result("h2")
+        r_raw.metadata = None  # 未应用 merge
+        md2, _, _ = cache_hit_metadata(
+            r_raw, engine="funasr", options=SPK, output_format="json",
+        )
+        assert "segment_merge_max_span_sec" not in md2
+
 
 # ==================== 出口 1: get_cached_result ====================
 
@@ -324,6 +344,62 @@ class TestCachedProjection:
         assert cached.segments[1].text == "C"
         assert all(s.speaker is None for s in cached.segments)
         assert cached.speakers == []
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_hit_funasr_row_cap_key_despite_request_qwen3(self, db):
+        """P2①: 跨引擎回退命中 funasr 行, 请求 engine=qwen3+json → metadata 带 cap 键.
+        内容已 merge; cap 键存在 == 实际过了 merge 视图.
+        """
+        from src.core.config import config
+        from src.core.result_projection import cache_hit_metadata
+
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-xeng-fa", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result(
+            "h-xeng-fa", engine="qwen3", allow_cross_engine=True, options=SPK,
+        )
+        assert cached is not None
+        assert len(cached.segments) == 1  # merge 已应用
+        assert cached.segments[0].text == "AB"
+        # 通道标 merge 已应用 (get 不 pop)
+        assert (cached.metadata or {}).get("segment_merge_applied") is True
+        md, _, _ = cache_hit_metadata(
+            cached, engine="qwen3", options=SPK, output_format="json",
+        )
+        assert md["segment_merge_max_span_sec"] == config.transcription.segment_merge_max_span_sec
+        assert md["engine"] == "qwen3"  # 请求引擎仍回显
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_hit_qwen3_row_no_cap_key_despite_request_funasr(self, db):
+        """P2②: 跨引擎命中 qwen3 行, 请求 funasr+json → 内容未 merge 且不带 cap 键."""
+        from src.core.result_projection import cache_hit_metadata
+
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-xeng-q", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="qwen3")
+        cached = await db.get_cached_result(
+            "h-xeng-q", engine="funasr", allow_cross_engine=True, options=SPK,
+        )
+        assert cached is not None
+        assert len(cached.segments) == 2  # 未 merge
+        assert not (cached.metadata or {}).get("segment_merge_applied")
+        md, _, _ = cache_hit_metadata(
+            cached, engine="funasr", options=SPK, output_format="json",
+        )
+        assert "segment_merge_max_span_sec" not in md
 
     @pytest.mark.asyncio
     async def test_funasr_nospk_srt_skips_merge_sentence_level(self, db):

@@ -135,3 +135,38 @@ class TestMergeSegmentsView:
         out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
         assert len(out) == 1
         assert out[0].end_time - out[0].start_time == 120.0
+
+    def test_nested_segment_merge_end_not_shrink(self):
+        """嵌套 B 完全落在 A 内: 合并后 end=max, 不收缩丢失时间."""
+        segs = [
+            _seg(0.0, 5.0, "A"),
+            _seg(4.0, 4.5, "B"),  # 嵌套, gap=-1 < 3
+        ]
+        out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
+        assert len(out) == 1
+        assert out[0].start_time == 0.0
+        assert out[0].end_time == 5.0  # max(5, 4.5), 非 next.end=4.5
+        assert out[0].text == "AB"
+
+    def test_out_of_order_segment_not_merged(self):
+        """倒序段: next.start < current.start → 不合并, 按输入顺序原样输出."""
+        segs = [
+            _seg(10.0, 11.0, "后"),
+            _seg(0.0, 1.0, "前"),
+        ]
+        out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
+        assert len(out) == 2
+        assert out[0].start_time == 10.0 and out[0].end_time == 11.0 and out[0].text == "后"
+        assert out[1].start_time == 0.0 and out[1].end_time == 1.0 and out[1].text == "前"
+
+    def test_partial_overlap_merge_extends_end(self):
+        """部分重叠 A=[0,5], B=[4,8] → 合并为 [0,8]."""
+        segs = [
+            _seg(0.0, 5.0, "A"),
+            _seg(4.0, 8.0, "B"),
+        ]
+        out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
+        assert len(out) == 1
+        assert out[0].start_time == 0.0
+        assert out[0].end_time == 8.0
+        assert out[0].text == "AB"
