@@ -19,6 +19,7 @@ import pytest
 from src.core.database import DatabaseManager
 from src.core.result_projection import (
     cache_hit_metadata,
+    merge_segments_view,
     project_result_nospk,
     segments_to_srt_text,
 )
@@ -141,6 +142,26 @@ class TestCacheHitMetadata:
         )
         assert srt_ok is False
         assert md is None
+
+    def test_json_cap_key_from_segment_merge_applied_channel_not_request_engine(self):
+        """P2: cap 键跟通道 segment_merge_applied, 不跟请求 engine 推断.
+        请求 qwen3 但通道标已 merge → 带 cap; 请求 funasr 但未 merge → 不带.
+        """
+        from src.core.config import config
+
+        r_merged = make_diarized_result("h")
+        r_merged.metadata = {"segment_merge_applied": True}
+        md, _, _ = cache_hit_metadata(
+            r_merged, engine="qwen3", options=SPK, output_format="json",
+        )
+        assert md["segment_merge_max_span_sec"] == config.transcription.segment_merge_max_span_sec
+
+        r_raw = make_diarized_result("h2")
+        r_raw.metadata = None  # 未应用 merge
+        md2, _, _ = cache_hit_metadata(
+            r_raw, engine="funasr", options=SPK, output_format="json",
+        )
+        assert "segment_merge_max_span_sec" not in md2
 
 
 # ==================== 出口 1: get_cached_result ====================
@@ -265,6 +286,145 @@ class TestCachedProjection:
                                           allow_cross_engine=False, options=NOSPK)
         assert miss is None
 
+    @pytest.mark.asyncio
+    async def test_funasr_json_applies_merge_view(self, db):
+        """缓存命中 funasr 行 JSON: 应用 merge 视图 (同 spk 相邻句合并)."""
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-merge-fa", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="你好。", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.2, end_time=2.0, text="世界。", speaker="Speaker1"),
+                TranscriptionSegment(start_time=5.0, end_time=6.0, text="换人", speaker="Speaker2"),
+            ],
+            speakers=["Speaker1", "Speaker2"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result("h-merge-fa", engine="funasr", options=SPK)
+        assert cached is not None
+        # Speaker1 两句合并, Speaker2 独立
+        assert len(cached.segments) == 2
+        assert cached.segments[0].text == "你好。世界。"
+        assert cached.segments[0].speaker == "Speaker1"
+        assert cached.segments[1].text == "换人"
+
+    @pytest.mark.asyncio
+    async def test_qwen3_json_does_not_apply_merge_view(self, db):
+        """qwen3 行不过 merge 视图 (行为与改前一致)."""
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-merge-q", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="qwen3")
+        cached = await db.get_cached_result("h-merge-q", engine="qwen3", options=SPK)
+        assert len(cached.segments) == 2
+        assert cached.segments[0].text == "A"
+        assert cached.segments[1].text == "B"
+
+    @pytest.mark.asyncio
+    async def test_funasr_nospk_merge_then_project_order(self, db):
+        """顺序铁律: 先 merge 后 nospk — merge 用 speaker, 再抹 speaker."""
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-merge-n", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+                TranscriptionSegment(start_time=2.1, end_time=3.0, text="C", speaker="Speaker2"),
+            ],
+            speakers=["Speaker1", "Speaker2"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result("h-merge-n", engine="funasr", options=NOSPK)
+        # 若反序 (先 nospk) 会把 null speaker 全并成 1 条; 正确序: 2 条 (AB 合并 + C)
+        assert len(cached.segments) == 2
+        assert cached.segments[0].text == "AB"
+        assert cached.segments[1].text == "C"
+        assert all(s.speaker is None for s in cached.segments)
+        assert cached.speakers == []
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_hit_funasr_row_cap_key_despite_request_qwen3(self, db):
+        """P2①: 跨引擎回退命中 funasr 行, 请求 engine=qwen3+json → metadata 带 cap 键.
+        内容已 merge; cap 键存在 == 实际过了 merge 视图.
+        """
+        from src.core.config import config
+        from src.core.result_projection import cache_hit_metadata
+
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-xeng-fa", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result(
+            "h-xeng-fa", engine="qwen3", allow_cross_engine=True, options=SPK,
+        )
+        assert cached is not None
+        assert len(cached.segments) == 1  # merge 已应用
+        assert cached.segments[0].text == "AB"
+        # 通道标 merge 已应用 (get 不 pop)
+        assert (cached.metadata or {}).get("segment_merge_applied") is True
+        md, _, _ = cache_hit_metadata(
+            cached, engine="qwen3", options=SPK, output_format="json",
+        )
+        assert md["segment_merge_max_span_sec"] == config.transcription.segment_merge_max_span_sec
+        assert md["engine"] == "qwen3"  # 请求引擎仍回显
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_hit_qwen3_row_no_cap_key_despite_request_funasr(self, db):
+        """P2②: 跨引擎命中 qwen3 行, 请求 funasr+json → 内容未 merge 且不带 cap 键."""
+        from src.core.result_projection import cache_hit_metadata
+
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-xeng-q", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="qwen3")
+        cached = await db.get_cached_result(
+            "h-xeng-q", engine="funasr", allow_cross_engine=True, options=SPK,
+        )
+        assert cached is not None
+        assert len(cached.segments) == 2  # 未 merge
+        assert not (cached.metadata or {}).get("segment_merge_applied")
+        md, _, _ = cache_hit_metadata(
+            cached, engine="funasr", options=SPK, output_format="json",
+        )
+        assert "segment_merge_max_span_sec" not in md
+
+    @pytest.mark.asyncio
+    async def test_funasr_nospk_srt_skips_merge_sentence_level(self, db):
+        """nospk SRT 旁路: 不过 merge 视图, 句级直接渲染."""
+        sentence_level = TranscriptionResult(
+            task_id="t", file_name="x.wav", file_hash="h-srt-m", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="句一", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="句二", speaker="Speaker1"),
+            ],
+            speakers=["Speaker1"], processing_time=0.5,
+        )
+        await db.save_result(sentence_level, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result(
+            "h-srt-m", output_format="srt", engine="funasr", options=NOSPK,
+        )
+        assert cached is not None
+        # 句级两条都出现在 SRT (未合并)
+        assert "句一" in cached["content"]
+        assert "句二" in cached["content"]
+        # 两条独立 cue (编号 1 和 2)
+        assert "\n2\n" in cached["content"] or cached["content"].startswith("1\n")
+        lines = [ln for ln in cached["content"].splitlines() if ln.strip().isdigit()]
+        assert lines == ["1", "2"]
+
 
 # ==================== metadata 不入库 ====================
 
@@ -333,6 +493,94 @@ class TestFreshExitProjection:
         saved = mock_db.save_result.call_args.args[0]
         assert saved.speakers == ["Speaker1", "Speaker2"]
         assert mock_db.save_result.call_args.kwargs.get("engine") == "funasr"
+
+    @pytest.mark.asyncio
+    async def test_funasr_fresh_json_merge_view_cache_sentence_level(self, tmp_path):
+        """fresh funasr JSON: 客户端见 merge 视图; 缓存存句级; 顺序 merge→nospk."""
+        from src.core.task_manager import TaskManager
+
+        mgr = TaskManager()
+        task = self._funasr_task(tmp_path)
+        mgr.tasks["t-fr"] = task
+
+        sentence_level = TranscriptionResult(
+            task_id="t-fr", file_name="x.wav", file_hash="h-fr", duration=10.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=1.0, text="A", speaker="Speaker1"),
+                TranscriptionSegment(start_time=1.1, end_time=2.0, text="B", speaker="Speaker1"),
+                TranscriptionSegment(start_time=2.1, end_time=3.0, text="C", speaker="Speaker2"),
+            ],
+            speakers=["Speaker1", "Speaker2"], processing_time=0.5,
+        )
+        fake_transcriber = MagicMock()
+        fake_transcriber.transcribe = AsyncMock(
+            return_value=(sentence_level, {"sentence_info": []})
+        )
+
+        with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake_transcriber), \
+             patch("src.core.task_manager.db_manager") as mock_db:
+            mock_db.save_result = AsyncMock()
+            with patch.object(mgr, "_notify_task_progress", new=AsyncMock()), \
+                 patch.object(mgr, "_notify_task_complete", new=AsyncMock()):
+                await mgr._process_task("t-fr")
+
+        # 客户端: merge 后 nospk → 2 段, speaker null
+        assert len(task.result.segments) == 2
+        assert task.result.segments[0].text == "AB"
+        assert task.result.segments[1].text == "C"
+        assert all(s.speaker is None for s in task.result.segments)
+        # 缓存: 句级 3 段 + speakers 保留 (先 save 再投影)
+        saved = mock_db.save_result.call_args.args[0]
+        assert len(saved.segments) == 3
+        assert saved.segments[0].text == "A"
+        assert saved.speakers == ["Speaker1", "Speaker2"]
+        # metadata 回显 cap
+        assert task.result.metadata.get("segment_merge_max_span_sec") == 120.0
+
+    @pytest.mark.asyncio
+    async def test_funasr_fresh_srt_does_not_apply_merge(self, tmp_path):
+        """SRT 分支不应用 merge 视图 (content 来自引擎 raw 路径 / 投影 segments)."""
+        from src.core.task_manager import TaskManager
+
+        mgr = TaskManager()
+        task = self._funasr_task(tmp_path, output_format="srt")
+        # diarize=True 避免 nospk 重渲染, 直接用引擎 content
+        task.options = TranscribeOptions(diarize=True)
+        mgr.tasks["t-fr"] = task
+
+        segs = [
+            TranscriptionSegment(start_time=0.0, end_time=1.0, text="句一", speaker="Speaker1"),
+            TranscriptionSegment(start_time=1.1, end_time=2.0, text="句二", speaker="Speaker1"),
+        ]
+        srt_dict = {
+            "format": "srt",
+            "content": (
+                "1\n00:00:00,000 --> 00:00:01,000\nSpeaker1:句一\n\n"
+                "2\n00:00:01,100 --> 00:00:02,000\nSpeaker1:句二\n"
+            ),
+            "file_name": "x.wav", "file_hash": "h-fr", "duration": 10.0,
+            "processing_time": 0.5,
+            "raw_result": [{"sentence_info": []}],
+            "segments": segs,
+        }
+        fake_transcriber = MagicMock()
+        fake_transcriber.transcribe = AsyncMock(return_value=srt_dict)
+
+        with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake_transcriber), \
+             patch("src.core.task_manager.db_manager") as mock_db:
+            mock_db.save_result = AsyncMock()
+            with patch.object(mgr, "_notify_task_progress", new=AsyncMock()), \
+                 patch.object(mgr, "_notify_task_complete", new=AsyncMock()):
+                await mgr._process_task("t-fr")
+
+        # SRT content 原样 (两句未合并)
+        assert "句一" in task.srt_content
+        assert "句二" in task.srt_content
+        # 缓存存句级
+        saved = mock_db.save_result.call_args.args[0]
+        assert len(saved.segments) == 2
+        # SRT metadata 不带 segment_merge_max_span_sec
+        assert "segment_merge_max_span_sec" not in (task.result.metadata or {})
 
     @pytest.mark.asyncio
     async def test_funasr_fresh_srt_content_no_prefix(self, tmp_path):

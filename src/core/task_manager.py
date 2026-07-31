@@ -715,7 +715,7 @@ class TaskManager:
                 from src.core.database import cache_save_engine_for
                 save_tag = cache_save_engine_for(task, has_words)
 
-                # 保存到缓存（先于投影, 同上）
+                # 保存到缓存（先于投影, 同上）— funasr 存句级真值, 合并视图只在 serve 出口
                 await db_manager.save_result(transcription_result, raw_result, engine=save_tag)
                 # word_align 失败原因 (fresh 出口回显 metadata.word_align_error, codex #11)
                 # funasr 的 raw_result 是 model.generate() 原始 list (非 dict), word_align 是
@@ -724,6 +724,19 @@ class TaskManager:
                     (raw_result.get("word_align") or {}).get("error")
                     if isinstance(raw_result, dict) else None
                 )
+
+                # D3: funasr JSON 出口应用 merge 视图 (先 merge 后 nospk; SRT 分支不应用).
+                # deep copy 后再改 segments, 避免 mutate 已交给 save_result 的对象引用
+                # (save 虽已 model_dump_json 序列化, 但 mock/后续路径可能仍持有原对象).
+                if task.engine == "funasr":
+                    from src.core.config import config as _cfg
+                    from src.core.result_projection import merge_segments_view
+                    transcription_result = transcription_result.model_copy(deep=True)
+                    transcription_result.segments = merge_segments_view(
+                        transcription_result.segments,
+                        gap_sec=_cfg.transcription.segment_merge_gap_sec,
+                        max_span_sec=_cfg.transcription.segment_merge_max_span_sec,
+                    )
 
                 # fresh 结果出口投影 (funasr 照算路径; qwen3 原生 nospk 幂等跳过)
                 if not task.options.diarize and transcription_result.speakers:

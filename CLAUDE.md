@@ -37,7 +37,7 @@ Always respond in 中文
 
 两个引擎并行接入生产，dispatch 走轻量函数路由（**不是 ABC 抽象**）：
 
-- **FunASR**（生产稳定）: `src/core/funasr_transcriber.py`，MPS GPU 加速
+- **FunASR**（生产稳定）: `src/core/funasr_transcriber.py`，MPS GPU 加速。canonical 为**句级** segments（引擎层不再合并）；JSON 出口在 serve 投影层 `merge_segments_view` 做同说话人相邻句合并 + `segment_merge_max_span_sec`（默认 120s）上限（issue #1）
 - **Qwen3**: `src/core/qwen3_pool_transcriber.py`（**runtime-aware 池 dispatch**, 见下文）+ `src/core/qwen3_transcriber.py`（单例）+ `src/core/qwen3/asr.py`（引擎构造）。Mac 上 frontend ONNX 走 CoreML ANE（`onnx_provider="COREML_ANE_FE"`），见 `spikes/qwen3_mac_hw_accel/SUMMARY.md`
 - **Dispatch**: `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 按 engine 名分支
 - **引擎选择优先级**: `upload_request.engine` > `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`）> `funasr`
@@ -106,8 +106,9 @@ Qwen3 diarize 有 **两个 backend 实现**，通过 `src/core/qwen3/diarize.py:
 - **qwen3 = 真跳层（D2/D5）**：跳 diarize + filter_spurious / cluster_merge / short_guard / relabel，段来自 ASR ~40s chunk，超长段走 nospk 分层切段（pipeline 5.7 层）。**内部 `Segment(speaker:int)` 永不为 None**，null 只在出口转换层出现。
 - **funasr = 出口投影（D4）**：cam++ 提取无 per-call 开关，照算后由 serve 层投影抹 speaker；**缓存免折维**——存一行 diarized，serve 时按需投影，一行通吃两种请求。
 - **缓存折维（D9）**：`compute_cache_engine` 字符串折维，顺序固定缺省不写：`qwen3` / `qwen3+wa:<lang>` / `qwen3+nospk` / `qwen3+wa:<lang>+nospk`（2 维 4 形态；**维度 >3 升级结构化 variant**）。折维 tag 一律禁 cross-engine。折维参数收拢在 `database.cache_params_for(task)` / `cache_params(engine, options)`，**不要手写**。
-- **投影双出口（D3+T-A）**：纯函数 `src/core/result_projection.py`（`project_result_nospk` + `segments_to_srt_text` 引擎中立 SRT 渲染点 + `build_result_metadata`），引擎代码零改动。出口 1 = `db_manager.get_cached_result`（exact `+nospk` miss → 同引擎同 wa-tag diarized 行现场投影，标 `projected:true`，**不回写**——缓存永远只存真算结果；SRT nospk 旁路 funasr raw 路径从投影 segments 重渲染）；出口 2 = task_manager fresh 结果（缓存先存引擎真算结果再投影）。坏行具名异常当 miss + warn，禁 catch-all。
-- **metadata 回显（E2）**：`TranscriptionResult.metadata = {engine, diarize, word_align, language, projected}`（+ word_align 请求但失败时附 `word_align_error`），serve 层组装（fresh 出口 + 3 个缓存命中出口），**save_result exclude 不入库**（projected 是请求级属性）。合并优先级：request > 分片 session 回填 > config > 引擎默认。`word_align` 反映**实际交付**（delivered: qwen3 AND options.word_align AND json AND words 实际挂上），非"请求想要"。
+- **投影双出口（D3+T-A）**：纯函数 `src/core/result_projection.py`（`project_result_nospk` + `merge_segments_view` + `segments_to_srt_text` + `build_result_metadata`）。出口 1 = `db_manager.get_cached_result`（exact `+nospk` miss → 同引擎同 wa-tag diarized 行现场投影，标 `projected:true`，**不回写**——缓存永远只存真算结果；SRT nospk 旁路 funasr raw 路径从投影 segments 重渲染）；出口 2 = task_manager fresh 结果（缓存先存引擎真算结果再投影）。坏行具名异常当 miss + warn，禁 catch-all。
+- **funasr segment 合并视图（issue #1）**：引擎/缓存存句级；JSON 出口（fresh + 缓存命中，`cached_engine == funasr`）`merge_segments_view`（gap + max_span cap）；**先 merge 后 nospk**。nospk SRT 旁路不过 merge（句级渲染）。config：`segment_merge_gap_sec=3.0` / `segment_merge_max_span_sec=120.0`。
+- **metadata 回显（E2）**：`TranscriptionResult.metadata = {engine, diarize, word_align, language, projected}`（+ word_align 请求但失败时附 `word_align_error`；funasr+JSON 附 `segment_merge_max_span_sec`），serve 层组装（fresh 出口 + 3 个缓存命中出口），**save_result exclude 不入库**（projected 是请求级属性）。合并优先级：request > 分片 session 回填 > config > 引擎默认。`word_align` 反映**实际交付**（delivered: qwen3 AND options.word_align AND json AND words 实际挂上），非"请求想要"。
 - **可观测性**：per-task 日志带 diarize 生效值；`db_manager.projected_serves` 计数进 `get_cache_stats()`；切段 stats 进 raw_result.nospk_split + 日志。
 - **部署顺序**：老 server Pydantic 忽略未知 diarize 字段 → **server 先升级、客户端后启用**（部署假设有单测钉死）。
 - **NOT in scope**：mode 三档枚举 / num_speakers per-request（TODOS #15，diarize=false 时闲置打 info 日志）/ funasr 启动不加载 cam++（TODOS #16）/ 词级替换式 merge（TODOS #14）。

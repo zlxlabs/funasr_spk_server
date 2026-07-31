@@ -2,8 +2,20 @@
   "segments": [
     {
       "start_time": 0.05,
+      "end_time": 0.45,
+      "text": "你好，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 0.81,
+      "end_time": 3.31,
+      "text": "这是一段单人语音测试音频，",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 3.69,
       "end_time": 6.33,
-      "text": "你好，这是一段单人语音测试音频，用于验证转录引擎的基础能力。",
+      "text": "用于验证转录引擎的基础能力。",
       "speaker": "Speaker1"
     }
   ],

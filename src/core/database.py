@@ -16,7 +16,11 @@ from pathlib import Path
 from loguru import logger
 from pydantic import ValidationError
 from src.core.config import config
-from src.core.result_projection import project_result_nospk, segments_to_srt_text
+from src.core.result_projection import (
+    merge_segments_view,
+    project_result_nospk,
+    segments_to_srt_text,
+)
 from src.models.schemas import TranscriptionResult
 
 
@@ -374,20 +378,42 @@ class DatabaseManager:
                 if output_format == "json":
                     result_data = json.loads(result_json)
                     result = TranscriptionResult(**result_data)
+                    # D3: funasr 行 JSON 出口先 merge 视图 (句级→合并, 带 span cap),
+                    # 再 nospk。顺序铁律: merge 需要 speaker; 反序会把 null speaker 全并成一条.
+                    # 以行的 engine 列判定, 不看请求; qwen3 家族 (含折维 tag) 一律不过.
+                    merge_applied = False
+                    if cached_engine == "funasr":
+                        result.segments = merge_segments_view(
+                            result.segments,
+                            gap_sec=config.transcription.segment_merge_gap_sec,
+                            max_span_sec=config.transcription.segment_merge_max_span_sec,
+                        )
+                        merge_applied = True
+                    was_projected = False
                     if nospk:
                         # 出口投影 (D8): 投影回退行 / funasr diarized 行 → 抹 speaker.
                         # projected=True 表示"由 diarized 行投影而来"; exact nospk 行
                         # (真算的) 为 False. metadata 是请求级属性, 不入库.
                         was_projected = bool(result.speakers)
                         result = project_result_nospk(result)
-                        result.metadata = {"projected": was_projected}
                         if was_projected:
                             self.projected_serves += 1
+                    # serve 层通道 (与 projected 同形, get 不 pop; 不入库):
+                    # segment_merge_applied 让 cache_hit_metadata 按事实回显 cap 键,
+                    # 不跟请求 engine 推断 (跨引擎回退时请求 engine ≠ 行 engine).
+                    channel = {}
+                    if nospk:
+                        channel["projected"] = was_projected
+                    if merge_applied:
+                        channel["segment_merge_applied"] = True
+                    result.metadata = channel or None
                     return result
                 if output_format == "srt":
                     if nospk:
                         # nospk SRT: 旁路 raw 路径 (funasr raw 会渲染出 SpeakerN: 前缀),
                         # 从投影 segments 重渲染无前缀 (D8 + T-D #4 渲染点).
+                        # **不过 merge 视图** — SRT 语义是原始分割; 句级直接渲染
+                        # (canonical 改句级后从粗变细是预期修正).
                         result_data = json.loads(result_json)
                         tr = TranscriptionResult(**result_data)
                         was_projected = bool(tr.speakers)

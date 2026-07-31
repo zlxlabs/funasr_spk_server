@@ -142,6 +142,7 @@ def apply_short_segment_guard(
     aba_max_mid_sec: float = 1.5,
     merge_same: bool = True,
     merge_gap_sec: float = 0.05,
+    max_span_sec: float = 0.0,
 ) -> tuple[list[dict], dict]:
     """short-segment guard 完整 pipeline 入口.
 
@@ -155,6 +156,7 @@ def apply_short_segment_guard(
         aba_max_mid_sec: aba_smoothing 中间段最大时长.
         merge_same: 是否在 ABA 后合并同 speaker.
         merge_gap_sec: merge_consecutive_same_speaker 的 gap 阈值.
+        max_span_sec: 合并累计跨度上限 (秒); <=0 无上限. 透传给 merge_consecutive_same_speaker.
 
     Returns:
         (new_segments, stats) — stats 含各阶段子 stats + enabled flag.
@@ -168,19 +170,25 @@ def apply_short_segment_guard(
     cur, aba_stats = aba_smoothing(cur, max_mid_sec=aba_max_mid_sec)
     stats["aba"] = aba_stats
     if merge_same:
-        cur, merged = merge_consecutive_same_speaker(cur, merge_gap_sec=merge_gap_sec)
+        cur, merged = merge_consecutive_same_speaker(
+            cur, merge_gap_sec=merge_gap_sec, max_span_sec=max_span_sec,
+        )
         stats["merge"] = {"merged": merged}
     return cur, stats
 
 
 def merge_consecutive_same_speaker(
-    segments: list[dict], merge_gap_sec: float = 0.05
+    segments: list[dict],
+    merge_gap_sec: float = 0.05,
+    max_span_sec: float = 0.0,
 ) -> tuple[list[dict], int]:
     """合并相邻同 speaker + gap ≤ merge_gap_sec 的连续段, 减少碎片.
 
     Args:
         segments: ordered list of {start, end, speaker, text}.
         merge_gap_sec: 允许合并的最大 gap, 超过则视为独立段.
+        max_span_sec: 合并后累计跨度上限 (秒). <=0 不设上限 (默认, 保持历史行为);
+            >0 时 next.end - prev.start 超限则在段边界断开, 防单人独白滚成巨段.
 
     Returns:
         (new_segments, merged_count).
@@ -193,7 +201,9 @@ def merge_consecutive_same_speaker(
         prev = out[-1]
         same_speaker = str(prev.get("speaker")) == str(s.get("speaker"))
         small_gap = float(s["start"]) - float(prev["end"]) <= merge_gap_sec
-        if same_speaker and small_gap:
+        span = float(s["end"]) - float(prev["start"])
+        span_ok = max_span_sec <= 0 or span <= max_span_sec
+        if same_speaker and small_gap and span_ok:
             prev["text"] = (prev.get("text") or "") + (s.get("text") or "")
             prev["end"] = max(float(prev["end"]), float(s["end"]))
             merged += 1
