@@ -82,11 +82,16 @@ async def test_word_align_off_segments_have_no_words(podcast_audio: Path):
 @pytest.mark.asyncio
 async def test_word_align_fallback_on_align_error(podcast_audio: Path):
     """word_align on 但对齐抛错 → 段照常出, 不崩, words=None."""
+    from src.models.schemas import TranscribeOptions
+
     tx = _build_transcriber(word_align_enabled=True, model_path="/nonexistent/mms.onnx")
     await tx.initialize()
     # _ensure_word_aligner 会 build 失败 (模型缺) → 进 except, 段仍出
+    # 决策 1A: transcribe 读 options.word_align (effective 值), 不读 config;
+    # 直调 transcribe 绕过 resolve_word_align, 故必须显式传 word_align=True.
     result, raw = await tx.transcribe(
-        audio_path=str(podcast_audio), task_id="wa-fallback", output_format="json"
+        audio_path=str(podcast_audio), task_id="wa-fallback", output_format="json",
+        options=TranscribeOptions(word_align=True),
     )
     assert len(result.segments) > 0
     assert all(s.words is None for s in result.segments)
@@ -108,7 +113,9 @@ async def test_word_align_real_mms_produces_words(podcast_audio: Path):
     await tx.initialize()
     result, raw = await tx.transcribe(
         audio_path=str(podcast_audio), task_id="wa-real", output_format="json",
-        options=TranscribeOptions(language="chi"),
+        # 决策 1A: word_align 是 per-request effective 值, config 的 word_align_enabled
+        # 只在 resolve_word_align 里当兜底; 直调 transcribe 必须显式传.
+        options=TranscribeOptions(language="chi", word_align=True),
     )
 
     assert raw["word_align"]["enabled"] is True
