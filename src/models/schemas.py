@@ -232,6 +232,7 @@ class ErrorResponse(BaseModel):
     """错误响应"""
     error: str = Field(..., description="错误类型")
     message: str = Field(..., description="错误信息")
+    task_id: Optional[str] = Field(None, description="关联任务 ID；连接级错误为 None")
     details: Optional[Dict[str, Any]] = Field(None, description="详细信息")
     
     model_config = {"protected_namespaces": ()}

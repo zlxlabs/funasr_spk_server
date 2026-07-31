@@ -153,8 +153,8 @@ class TestTerminalizeStaleProcessing:
         cfg_guard.task_max_processing_seconds = 100
         mgr = TaskManager()
         mgr.tasks["stuck"] = make_task("stuck", TaskStatus.PROCESSING, started_ago=500)
-        n = mgr._terminalize_stale_processing()
-        assert n == 1
+        timed_out_tasks = mgr._terminalize_stale_processing()
+        assert len(timed_out_tasks) == 1
         assert mgr.tasks["stuck"].status == TaskStatus.TIMED_OUT
         assert mgr.tasks["stuck"].completed_at is not None
         assert mgr.tasks["stuck"].error
