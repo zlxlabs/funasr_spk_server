@@ -25,7 +25,10 @@ except ImportError:  # pragma: no cover
 HANDSHAKE_TIMEOUT_SEC = 30.0   # connected / upload_request 应答 / 分片 ack
 RESULT_TIMEOUT_SEC = 900.0     # 等转录结果（长音频用例可能跑十几分钟）
 
-# 服务端失败终态走 task_progress(status=failed|timed_out|cancelled)，不是独立消息类型
+# 服务端失败双发：先 task_progress(status=failed|timed_out|cancelled)，再补一条
+# type="error" 的显式终态消息（notify_task_error）。两条都是终态信号，本 helper 先命中
+# task_progress 分支即返回，error 分支（下方 while 循环里）是兜底。
+# 保留 task_progress 判定是为了兼容只发进度消息的老服务端。
 TERMINAL_FAILURE_STATUSES = {"failed", "timed_out", "cancelled"}
 
 
