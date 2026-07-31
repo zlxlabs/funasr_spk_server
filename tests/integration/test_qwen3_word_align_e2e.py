@@ -7,7 +7,7 @@ MMS CTC-FA ~1.2GB).
 覆盖:
 1. parity (flag 关): word_align off → 段 words 全 None, ASR/diarize 输出不变.
 2. fallback: word_align on 但 aligner 抛错 → 段照常出 (words=None), 不崩.
-3. 真 MMS: word_align on + 真 MMS → podcast 60s 出 words, 词时间落在所属段窗内.
+3. 真 MMS: word_align on + 真 MMS → podcast 60s 出 words, 最大重叠归段契约成立.
 4. 轻量精度基准: 词覆盖率 (有词段占比) 不低于阈值 (AAS 思路, 复用 PoC compare).
 
 MMS 模型路径: 优先 config 默认 (models/qwen3_diarize/ctc_forced_aligner/model.onnx),
@@ -102,7 +102,7 @@ async def test_word_align_fallback_on_align_error(podcast_audio: Path):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_word_align_real_mms_produces_words(podcast_audio: Path):
-    """真 MMS: podcast 60s 出 words, 词时间落在所属段窗内, 覆盖率达阈值."""
+    """真 MMS: podcast 60s 出 words, 最大重叠归段契约成立, 覆盖率达阈值."""
     model_path = _resolve_mms_model()
     if model_path is None:
         pytest.skip("MMS 模型缺失, 跑 scripts/download_qwen3_models.sh --word-align 后再测")
@@ -122,14 +122,25 @@ async def test_word_align_real_mms_produces_words(podcast_audio: Path):
     assert "error" not in raw["word_align"], f"word_align 异常: {raw['word_align']}"
     assert raw["word_align"]["total_words"] > 0, "真 MMS 应出词"
 
-    # 词时间落在所属段窗内 (容差 50ms, snap/relabel 不动词)
     segs_with_words = [s for s in result.segments if s.words]
     assert segs_with_words, "至少一段挂到词"
+
+    # 词归属契约: attach_words_to_segments 按"最大时间重叠"归段, 不承诺词落在段窗内
+    # —— 段边界由 ASR/diarize/silence_align 定, 词边界由 MMS 定, 两者无约束关系
+    # (MMS 常把窗口末尾 token 拉长)。clamp 会篡改测量值, 故锁契约而非锁"包含"。
     for s in segs_with_words:
         for w in s.words:
-            assert w.start >= s.start_time - 0.05, f"词 {w.text} start={w.start} < 段 {s.start_time}"
-            assert w.end <= s.end_time + 0.05, f"词 {w.text} end={w.end} > 段 {s.end_time}"
-            assert w.end >= w.start
+            assert w.end >= w.start, f"词 {w.text} 时间倒置: {w.start}-{w.end}"
+            overlap = min(s.end_time, w.end) - max(s.start_time, w.start)
+            assert overlap > 0, \
+                f"词 {w.text} ({w.start}-{w.end}) 与所属段 ({s.start_time}-{s.end_time}) 无重叠"
+            for other in result.segments:
+                if other is s:
+                    continue
+                other_ov = min(other.end_time, w.end) - max(other.start_time, w.start)
+                assert other_ov <= overlap + 1e-6, \
+                    (f"词 {w.text} 应归重叠更大的段 "
+                     f"({other.start_time}-{other.end_time}) 而非 ({s.start_time}-{s.end_time})")
 
     # 轻量精度基准: 有词段占比 (AAS 思路 — 覆盖率不退化)
     coverage = len(segs_with_words) / len(result.segments)
