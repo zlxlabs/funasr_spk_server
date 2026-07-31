@@ -197,3 +197,103 @@ class TestMaintenanceWatchdogNotification:
             assert lock_was_available is True
         finally:
             config.transcription.task_max_processing_seconds = old_timeout
+
+    @pytest.mark.asyncio
+    async def test_watchdog_notify_timeout_does_not_block_maintenance(
+        self, monkeypatch
+    ):
+        """通知挂起超过 timeout 时，维护循环应在 ~timeout 内结束并继续 sweeper。"""
+        from src.core.config import config
+
+        old_timeout = config.transcription.task_max_processing_seconds
+        old_notify_timeout = config.transcription.maintenance_notify_timeout_sec
+        config.transcription.task_max_processing_seconds = 100
+        # 极小超时，保证单测毫秒级完成
+        config.transcription.maintenance_notify_timeout_sec = 0.05
+        try:
+            manager = TaskManager()
+            manager.tasks["stuck"] = make_task(
+                task_id="stuck", status=TaskStatus.PROCESSING
+            )
+            manager.tasks["stuck"].started_at = datetime.now() - timedelta(seconds=500)
+            manager.is_running = True
+
+            hang = asyncio.Event()  # 永不 set → 模拟客户端停读背压阻塞
+
+            async def notify_task_failed(task, *, kind=None):
+                await hang.wait()
+
+            manager._notify_task_failed = notify_task_failed
+
+            def stop_after_locked_maintenance():
+                manager.is_running = False
+
+            manager._evict_terminal_tasks = MagicMock(
+                side_effect=stop_after_locked_maintenance
+            )
+            sweep_mock = AsyncMock()
+            manager._sweep_orphan_upload_files = sweep_mock
+            monkeypatch.setattr(
+                "src.core.task_manager.asyncio.sleep", AsyncMock()
+            )
+
+            # 若未加 wait_for，notify hang 会拖死单例循环；外层 1s 兜底防测卡死
+            await asyncio.wait_for(manager._maintenance_loop(), timeout=1.0)
+
+            assert manager.tasks["stuck"].status == TaskStatus.TIMED_OUT
+            # 超时跳过后仍继续后续维护步骤（孤儿文件 sweeper）
+            sweep_mock.assert_awaited_once()
+        finally:
+            config.transcription.task_max_processing_seconds = old_timeout
+            config.transcription.maintenance_notify_timeout_sec = old_notify_timeout
+
+    @pytest.mark.asyncio
+    async def test_one_notify_timeout_does_not_block_sibling_tasks(self, monkeypatch):
+        """同轮第一个任务通知超时，不影响后续任务仍收到终态通知。"""
+        from src.core.config import config
+
+        old_timeout = config.transcription.task_max_processing_seconds
+        old_notify_timeout = config.transcription.maintenance_notify_timeout_sec
+        config.transcription.task_max_processing_seconds = 100
+        config.transcription.maintenance_notify_timeout_sec = 0.05
+        try:
+            manager = TaskManager()
+            for task_id in ("stuck1", "stuck2"):
+                manager.tasks[task_id] = make_task(
+                    task_id=task_id, status=TaskStatus.PROCESSING
+                )
+                manager.tasks[task_id].started_at = (
+                    datetime.now() - timedelta(seconds=500)
+                )
+            manager.is_running = True
+
+            notified: list[str] = []
+            hang = asyncio.Event()
+
+            async def notify_task_failed(task, *, kind=None):
+                if task.task_id == "stuck1":
+                    await hang.wait()  # 第一个挂起直到 wait_for 超时取消
+                notified.append(task.task_id)
+
+            manager._notify_task_failed = notify_task_failed
+
+            def stop_after_locked_maintenance():
+                manager.is_running = False
+
+            manager._evict_terminal_tasks = MagicMock(
+                side_effect=stop_after_locked_maintenance
+            )
+            manager._sweep_orphan_upload_files = AsyncMock()
+            monkeypatch.setattr(
+                "src.core.task_manager.asyncio.sleep", AsyncMock()
+            )
+
+            await asyncio.wait_for(manager._maintenance_loop(), timeout=1.0)
+
+            assert manager.tasks["stuck1"].status == TaskStatus.TIMED_OUT
+            assert manager.tasks["stuck2"].status == TaskStatus.TIMED_OUT
+            # stuck1 超时被跳过；stuck2 仍应收到通知
+            assert notified == ["stuck2"]
+        finally:
+            config.transcription.task_max_processing_seconds = old_timeout
+            config.transcription.maintenance_notify_timeout_sec = old_notify_timeout

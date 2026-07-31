@@ -540,9 +540,22 @@ class TaskManager:
 
                 # 终态通知必须在队列锁外发送，避免网络 I/O 阻塞提交/维护；单条失败
                 # 也不能阻止同一轮的其它超时任务继续收到通知。
+                # 对端停读时 websocket.send 会因 TCP 背压无限阻塞——单例维护循环
+                # 绝不能被拖死（看门狗/淘汰/孤儿 sweeper 全停），故单次通知加超时。
+                timeout = config.transcription.maintenance_notify_timeout_sec
                 for task in timed_out_tasks:
                     try:
-                        await self._notify_task_failed(task, kind=ErrorKind.TIMEOUT.value)
+                        await asyncio.wait_for(
+                            self._notify_task_failed(
+                                task, kind=ErrorKind.TIMEOUT.value
+                            ),
+                            timeout=timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"看门狗终态通知超时({timeout}s)，跳过 {task.task_id} —— "
+                            f"客户端可能已停止读取；维护循环继续"
+                        )
                     except Exception as e:
                         logger.error(f"看门狗终态通知失败 {task.task_id}: {e}")
 
