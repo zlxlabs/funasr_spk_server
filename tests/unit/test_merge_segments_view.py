@@ -149,7 +149,7 @@ class TestMergeSegmentsView:
         assert out[0].text == "AB"
 
     def test_out_of_order_segment_not_merged(self):
-        """倒序段: next.start < current.start → 不合并, 按输入顺序原样输出."""
+        """倒序段: next.start < 上一输入 start → 不合并, 按输入顺序原样输出."""
         segs = [
             _seg(10.0, 11.0, "后"),
             _seg(0.0, 1.0, "前"),
@@ -170,3 +170,21 @@ class TestMergeSegmentsView:
         assert out[0].start_time == 0.0
         assert out[0].end_time == 8.0
         assert out[0].text == "AB"
+
+    def test_three_segment_regression_breaks_on_adjacent_non_monotonic(self):
+        """三段回退: A=[0,5] B=[4,4.5] C=[3,6] — AB 可并, C 相对 B 起点回退断开.
+        守卫必须比对相邻输入段 start, 不能只比合并组首段 start (3>=0 会误并).
+        """
+        segs = [
+            _seg(0.0, 5.0, "A"),
+            _seg(4.0, 4.5, "B"),
+            _seg(3.0, 6.0, "C"),  # 3 < 4 (上一输入 B.start) → 断开
+        ]
+        out = merge_segments_view(segs, gap_sec=3.0, max_span_sec=120.0)
+        assert len(out) == 2
+        assert out[0].start_time == 0.0
+        assert out[0].end_time == 5.0
+        assert out[0].text == "AB"
+        assert out[1].start_time == 3.0
+        assert out[1].end_time == 6.0
+        assert out[1].text == "C"

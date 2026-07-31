@@ -120,11 +120,12 @@ def merge_segments_view(
     """同说话人相邻句合并视图 (纯函数, 不 mutate 输入).
 
     合并条件 (全满足才并):
-      同 speaker AND next.start >= current.start (乱序守卫)
+      同 speaker AND 相邻输入 start 单调 (next.start >= 上一输入段 start)
       AND next.start - cur.end < gap_sec
       AND next.end - cur.start <= max_span_sec (max_span_sec<=0 不设上限).
     合并 end_time = max(cur.end, next.end) — 嵌套/重叠不收缩丢失时间.
-    乱序 (next.start < cur.start) → 断开另起, 不并出倒置区间.
+    乱序守卫比对**相邻输入段**起点 (非合并组首段 start): 三段回退
+    A=[0,5] B=[4,4.5] C=[3,6] 中 C.start=3 < B.start=4 → 断开, 不误并入组首 0.
     单句自身超 cap 原样保留, 绝不切句内 (投影只并不切).
     文本拼接保留标点: cur.text + next.text (与历史 FunASR 引擎层合并一致).
     对旧缓存已合并行天然幂等: 无「同 speaker 且 gap 小」相邻对则不产生新巨段.
@@ -134,12 +135,15 @@ def merge_segments_view(
 
     merged: List[TranscriptionSegment] = []
     current = segments[0].model_copy(deep=True)
+    # 上一输入段起点 (不论是否已并入 current); 乱序守卫按相邻输入单调, 非组首
+    prev_input_start = segments[0].start_time
 
     for next_seg in segments[1:]:
-        # 乱序守卫: next 起点早于 current 起点 → 不合并, 直接断开
-        if next_seg.start_time < current.start_time:
+        # 乱序守卫: 相对上一输入段 start 回退 → 不合并, 直接断开
+        if next_seg.start_time < prev_input_start:
             merged.append(current)
             current = next_seg.model_copy(deep=True)
+            prev_input_start = next_seg.start_time
             continue
 
         time_gap = next_seg.start_time - current.end_time
@@ -160,6 +164,8 @@ def merge_segments_view(
         else:
             merged.append(current)
             current = next_seg.model_copy(deep=True)
+
+        prev_input_start = next_seg.start_time
 
     merged.append(current)
     return merged
