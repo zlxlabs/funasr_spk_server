@@ -666,12 +666,100 @@ def test_doctor_directory_existing_and_creatable_targets_are_usable(tmp_path):
     assert "directory_unavailable" not in report["errors"]
 
 
-def test_doctor_directory_target_requires_writable_searchable_ancestor(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("blocked_mode", "expected_error"),
+    [(os.W_OK, "ancestor_not_writable"), (os.X_OK, "ancestor_not_searchable")],
+)
+def test_doctor_directory_target_requires_writable_searchable_ancestor(
+    tmp_path, monkeypatch, blocked_mode, expected_error
+):
     target = tmp_path / "missing" / "target"
-    monkeypatch.setattr("src.core.doctor_diagnostics.os.access", lambda *_: False)
+
+    def fake_access(_path, mode):
+        return mode != blocked_mode
+
+    monkeypatch.setattr("src.core.doctor_diagnostics.os.access", fake_access)
     result = inspect_doctor_directory_target(target)
     assert result["usable"] is False
-    assert result["error"] == "ancestor_not_writable"
+    assert result["error"] == expected_error
+
+
+def test_doctor_directory_target_rejects_nul_path_without_echoing_it():
+    result = inspect_doctor_directory_target("doctor-nul\x00target")
+    assert result == {
+        "exists": False,
+        "type": "invalid",
+        "size": 0,
+        "usable": False,
+        "error": "target_invalid",
+    }
+    assert "doctor-nul" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("blocked_mode", [os.W_OK, os.X_OK])
+def test_doctor_directory_existing_target_requires_write_and_search(
+    tmp_path, monkeypatch, blocked_mode
+):
+    target = tmp_path / "existing"
+    target.mkdir()
+
+    def fake_access(path, mode):
+        assert Path(path) == target
+        return mode != blocked_mode
+
+    monkeypatch.setattr("src.core.doctor_diagnostics.os.access", fake_access)
+    result = inspect_doctor_directory_target(target)
+    assert result["exists"] is True
+    assert result["type"] == "directory"
+    assert result["usable"] is False
+    assert result["error"] == (
+        "target_not_writable" if blocked_mode == os.W_OK else "target_not_searchable"
+    )
+
+
+def test_doctor_directory_target_matrix_keeps_existing_and_ancestor_semantics(tmp_path):
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(existing, target_is_directory=True)
+    dangling = tmp_path / "dangling"
+    dangling.symlink_to(tmp_path / "gone", target_is_directory=True)
+    blocked_file = tmp_path / "blocked"
+    blocked_file.write_text("not a directory", encoding="utf-8")
+
+    assert inspect_doctor_directory_target(existing)["usable"] is True
+    assert inspect_doctor_directory_target(linked)["usable"] is True
+    assert inspect_doctor_directory_target(tmp_path / "missing" / "child")["usable"] is True
+    assert inspect_doctor_directory_target(dangling)["error"] == "target_not_directory"
+    assert (
+        inspect_doctor_directory_target(blocked_file / "child")["error"]
+        == "ancestor_not_directory"
+    )
+
+
+def test_doctor_nul_directory_config_is_safe_probe_and_cli_error(tmp_path):
+    secret = "doctor-nul-config-secret"
+    bad_path = str(tmp_path / f"{secret}\x00target")
+    root, _ = _doctor_fixture(
+        tmp_path,
+        {"server": {"temp_dir": bad_path}},
+    )
+
+    probe = _run_fixture_probe(root)
+    assert probe.returncode == 2
+    assert len(probe.stdout.splitlines()) == 1
+    probe_payload = json.loads(probe.stdout)
+    assert probe_payload["status"] == "error"
+    assert probe_payload["error"] == "directory_unavailable"
+    assert bad_path not in probe.stdout + probe.stderr
+
+    doctor = _run_fixture_doctor(root)
+    assert doctor.returncode == 2
+    assert len(doctor.stdout.splitlines()) == 1
+    doctor_payload = json.loads(doctor.stdout)
+    assert doctor_payload["status"] == "error"
+    assert "directory_unavailable" in doctor_payload["errors"]
+    assert bad_path not in doctor.stdout + doctor.stderr
 
 
 def test_probe_stdout_contains_artifact_metadata_but_no_raw_paths(tmp_path):

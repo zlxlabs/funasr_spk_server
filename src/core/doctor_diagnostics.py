@@ -55,16 +55,23 @@ def inspect_doctor_directory_target(path: object) -> dict[str, object]:
         return {"exists": False, "type": "invalid", "size": 0, "usable": False, "error": "target_invalid"}
 
     candidate = Path(path)
+    if "\x00" in os.fspath(candidate):
+        return {"exists": False, "type": "invalid", "size": 0, "usable": False, "error": "target_invalid"}
     try:
         if os.path.lexists(candidate) and not candidate.exists():
             return {"exists": True, "type": "other", "size": 0, "usable": False, "error": "target_not_directory"}
         if candidate.exists():
             artifact = describe_doctor_artifact(candidate)
-            usable = artifact["exists"] and artifact["type"] == "directory"
+            if not artifact["exists"] or artifact["type"] != "directory":
+                return {**artifact, "usable": False, "error": "target_not_directory"}
+            if not os.access(candidate, os.W_OK):
+                return {**artifact, "usable": False, "error": "target_not_writable"}
+            if not os.access(candidate, os.X_OK):
+                return {**artifact, "usable": False, "error": "target_not_searchable"}
             return {
                 **artifact,
-                "usable": usable,
-                "error": None if usable else "target_not_directory",
+                "usable": True,
+                "error": None,
             }
     except OSError:
         return {"exists": False, "type": "unreadable", "size": 0, "usable": False, "error": "target_unreadable"}
