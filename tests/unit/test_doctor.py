@@ -129,7 +129,11 @@ def test_doctor_report_equal_provider_has_no_fallback(tmp_path):
         runtime="cpu",
         configured_provider="cpu",
         available_providers=["CPUExecutionProvider"],
-        qwen_artifacts={"asr": artifact, "seg": artifact, "embed": artifact},
+        qwen_artifacts={
+            "asr_model_dir": {"exists": True, "type": "directory", "size": 1},
+            "segmentation_model": artifact,
+            "embedding_model": artifact,
+        },
         funasr_dynamic_cache="unknown",
         word_align_artifact=artifact,
     )
@@ -185,6 +189,7 @@ def test_doctor_provider_resolution_matches_qwen_supported_paths(configured, ava
         [],
         {"transcription": {"default_engine": "bogus"}},
         {"transcription": {"default_engine": ""}},
+        {"qwen3": {"asr_model_dir": ""}},
         {"qwen3": {"word_align_model_path": None}},
     ],
 )
@@ -281,6 +286,7 @@ def test_doctor_cli_is_cwd_independent_and_single_json(tmp_path, cwd_kind):
 def test_doctor_cli_qwen_artifact_matrix_and_optional_word_align(tmp_path):
     asr_dir = tmp_path / "asr"
     asr_dir.mkdir()
+    (asr_dir / "model.json").write_text("model", encoding="utf-8")
     segmentation = tmp_path / "segmentation.onnx"
     segmentation.write_bytes(b"seg")
     embedding = tmp_path / "embedding.onnx"

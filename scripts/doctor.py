@@ -8,14 +8,20 @@ import platform
 import sys
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.dont_write_bytecode = True
 
-from src.core.doctor_diagnostics import build_doctor_report, describe_doctor_artifact
+from src.core.doctor_diagnostics import (  # noqa: E402
+    build_doctor_report,
+    describe_doctor_artifact,
+    resolve_doctor_config,
+)
 
 
-def _read_config() -> tuple[dict, list[str]]:
+def _read_config() -> tuple[object, list[str]]:
     try:
         with (ROOT / "config.json").open(encoding="utf-8") as stream:
             return json.load(stream), []
@@ -23,17 +29,17 @@ def _read_config() -> tuple[dict, list[str]]:
         return {}, ["configuration_unavailable"]
 
 
-def _section(config: dict, name: str) -> dict:
-    value = config.get(name, {})
-    return value if isinstance(value, dict) else {}
+def _read_dotenv() -> tuple[dict[str, object], list[str]]:
+    try:
+        env_path = ROOT / ".env"
+        if not env_path.exists():
+            return {}, []
+        return dict(dotenv_values(env_path)), []
+    except (OSError, ValueError):
+        return {}, ["dotenv_unavailable"]
 
 
-def _setting(section: dict, key: str, env_name: str, default=None):
-    return os.environ.get(env_name, section.get(key, default))
-
-
-def _runtime(available: list[str]) -> str:
-    forced = os.environ.get("FUNASR_RUNTIME", "").strip().lower()
+def _runtime(available: list[str], forced: str) -> str:
     if forced in {"cpu", "cuda", "mac_ane"}:
         return forced
     return "cuda" if "CUDAExecutionProvider" in available and platform.system() == "Linux" else "mac_ane" if platform.system() == "Darwin" else "cpu"
@@ -48,38 +54,41 @@ def _available_providers() -> list[str]:
         return []
 
 
-def _path(value: str) -> Path:
+def _path(value: object) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
     candidate = Path(value)
     return candidate if candidate.is_absolute() else ROOT / candidate
 
 
 def _diagnose() -> tuple[dict[str, object], int]:
-    config, errors = _read_config()
-    transcription = _section(config, "transcription")
-    qwen3 = _section(config, "qwen3")
-    profile = os.environ.get("FUNASR_PROFILE", "").strip().lower()
-    profile_engine = {"cuda_prod": "qwen3", "cuda_dev": "qwen3", "mac_prod": "funasr", "mac_dev": "funasr"}
-    engine = os.environ.get("FUNASR_DEFAULT_ENGINE", profile_engine.get(profile, transcription.get("default_engine", "funasr")))
-    provider = "cpu" if engine != "qwen3" else _setting(qwen3, "asr_encoder_provider", "FUNASR_QWEN3_ASR_ENCODER_PROVIDER", {"cuda_prod": "cuda", "cuda_dev": "cuda"}.get(profile, "auto"))
-    qwen_paths = {
-        "asr_model_dir": _setting(qwen3, "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR", "./models/qwen3_diarize/Qwen3-ASR-1.7B"),
-        "segmentation_model": _setting(qwen3, "segmentation_model", "FUNASR_QWEN3_SEGMENTATION_MODEL", "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx"),
-        "embedding_model": _setting(qwen3, "embedding_model", "FUNASR_QWEN3_EMBEDDING_MODEL", "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx"),
-    }
-    word_align = _setting(qwen3, "word_align_model_path", "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH", "./models/qwen3_diarize/ctc_forced_aligner/model.onnx")
+    config, config_errors = _read_config()
+    dotenv_data, dotenv_errors = _read_dotenv()
+    effective = resolve_doctor_config(config, dotenv_data, os.environ)
+    errors = config_errors + dotenv_errors + list(effective["errors"])
+    warnings = list(effective["warnings"])
     available = _available_providers()
+    paths = effective["qwen_paths"]
+    assert isinstance(paths, dict)
+    qwen_artifacts = {name: describe_doctor_artifact(_path(value)) for name, value in paths.items() if name != "word_align_model_path"}
+    provider = str(effective["provider"])
+    if provider == "coreml_ane_full":
+        model_dir = _path(paths.get("asr_model_dir"))
+        qwen_artifacts["backend_mlpackage"] = describe_doctor_artifact(
+            model_dir / "qwen3_asr_encoder_backend.mlpackage" if model_dir is not None else None
+        )
     report = build_doctor_report(
-        engine=str(engine).strip().lower(),
-        runtime=_runtime(available),
-        configured_provider=str(provider),
+        engine=str(effective["engine"]),
+        runtime=_runtime(available, str(effective["runtime_override"])),
+        configured_provider=provider,
         available_providers=available,
-        qwen_artifacts={name: describe_doctor_artifact(_path(value)) for name, value in qwen_paths.items()},
+        qwen_artifacts=qwen_artifacts,
         funasr_dynamic_cache="deferred",
-        word_align_artifact=describe_doctor_artifact(_path(word_align)),
+        word_align_artifact=describe_doctor_artifact(_path(paths.get("word_align_model_path"))),
+        platform_name=platform.system().lower(),
+        config_errors=errors,
+        config_warnings=warnings,
     )
-    report["errors"] = list(report["errors"]) + errors
-    if errors:
-        report["status"] = "error"
     code = {"ok": 0, "warning": 1, "error": 2}[str(report["status"])]
     return report, code
 
