@@ -28,9 +28,9 @@
 - **预期产出**：有效 terms 从 TranscribeOptions 穿透两套 pool/旧 worker 到 Qwen vendor；非空使用固定 context 模板，空值传 `None`。
 - **当前范围**：只消费 I1 已验证 terms；覆盖 file/inproc、旧任务、diarize/word_align parity；继续统一 cache bypass。
 - **关键决策**：服务端构造 `You are a helpful assistant.\nKnown terms:\n` 模板；不接受任意 prompt，不做 context fingerprint/cache。
-- **已知阻塞**：无；I1 schema/错误契约已随 PR #4 合并并完成路线审计。
+- **已知阻塞**：无代码阻塞；真实 Qwen 模型入口证据尚未取得，需在具备模型/运行时的本地 dev server 补齐，不能用 unit 结果替代。
 - **推进前必须拿到的证据**：
-  - [ ] 2×2×2 context unit 矩阵全绿；环境：本地 venv；命令：`venv/bin/python -m pytest tests/unit/test_qwen3_terms_context.py tests/unit/test_diarize_options_propagation.py tests/unit/test_transcribe_options.py tests/unit/test_result_metadata.py`
+  - [x] 2×2×2 context unit 矩阵全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_qwen3_terms_context.py tests/unit/test_diarize_options_propagation.py tests/unit/test_transcribe_options.py tests/unit/test_result_metadata.py`（73 passed）。相关 Qwen/pool/worker/capability 整文件回归 119 passed；terms cache 回归 9 passed。
   - [ ] Qwen 实际请求入口保持空/非空 parity；环境：本地 dev server；真实入口：WebSocket 上传并轮询 task status，确认 JSON/SRT 的 speaker/words 不回归。
 
 ### I4：只读 doctor 运维诊断
