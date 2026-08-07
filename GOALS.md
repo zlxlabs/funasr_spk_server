@@ -4,7 +4,7 @@
 
 - **目标**：让 VTA 生成的结构化 ASR 术语在服务端安全、可审计地进入各引擎，同时保持空值请求的旧行为。
 - **完成定义**：I1 协议/FunASR、I2 Qwen context、I4 doctor 均独立合并，并在各阶段拿到单测、CI 与真实入口证据；I3 仅向 VideoTranscriptAPI 创建交接 issue，不修改下游仓库。
-- **当前激活里程碑**：I2
+- **当前激活里程碑**：I4
 
 ## 里程碑路线图
 
@@ -24,25 +24,33 @@
 
 ### I2：Qwen3 context 穿透
 
-- **状态**：进行中
+- **状态**：已完成（真实 Qwen 入口为环境例外）
 - **预期产出**：有效 terms 从 TranscribeOptions 穿透两套 pool/旧 worker 到 Qwen vendor；非空使用固定 context 模板，空值传 `None`。
 - **当前范围**：只消费 I1 已验证 terms；覆盖 file/inproc、旧任务、diarize/word_align parity；继续统一 cache bypass。
 - **关键决策**：服务端构造 `You are a helpful assistant.\nKnown terms:\n` 模板；不接受任意 prompt，不做 context fingerprint/cache。
-- **已知阻塞**：无代码阻塞；真实 Qwen 模型入口证据尚未取得，需在具备模型/运行时的本地 dev server 补齐，不能用 unit 结果替代。
+- **已知阻塞**：无代码阻塞；I2 已由 PR #5 合并至 `ec455bc`，两轮 review 均 0 finding。当前环境没有真实 Qwen 模型/runtime，因此真实入口证据不可得；这是已记录的验收例外，不能用 unit 结果替代，也不阻塞独立 I4。
 - **推进前必须拿到的证据**：
   - [x] 2×2×2 context unit 矩阵全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_qwen3_terms_context.py tests/unit/test_diarize_options_propagation.py tests/unit/test_transcribe_options.py tests/unit/test_result_metadata.py`（74 passed）。相关 Qwen/pool/worker/capability 整文件回归 119 passed；terms cache 回归 9 passed。
-  - [ ] Qwen 实际请求入口保持空/非空 parity；环境：本地 dev server；真实入口：WebSocket 上传并轮询 task status，确认 JSON/SRT 的 speaker/words 不回归。
+  - [ ] Qwen 实际请求入口保持空/非空 parity；环境不可得（无模型/runtime），不伪称通过；目标真实入口：WebSocket 上传并轮询 task status，确认 JSON/SRT 的 speaker/words 不回归。
+
+#### I2 路线审计（2026-08-07 / PR #5 / `ec455bc`）
+
+- **里程碑真完成了吗？**：代码、unit、旧协议/cache/metadata 边界已完成，两轮 review 0 finding；真实 Qwen 入口因环境不可得，作为明确验收例外保留。
+- **下一个目标还是对的吗？**：是。I4 独立提供只读 provider/artifact/fallback doctor，不改变 Qwen 或 HTTP/WS 协议。
+- **有没有漏掉的里程碑？**：无；I3 仅由 VideoTranscriptAPI issue #57 承接。
+- **新证据是否改变了工作顺序？**：没有；Qwen 真实入口不可得不扩建环境，按已批准路线激活 I4。
+- **done 的定义还成立吗？**：是；I2 代码验收成立，真实入口例外单独标注，不能冒充完整运行时证据。
 
 ### I4：只读 doctor 运维诊断
 
-- **状态**：未开始
+- **状态**：进行中（PR #6 draft，分支 `feat/read-only-doctor-i4`）
 - **预期产出**：`scripts/doctor.py --json` 任意 cwd 输出单一 JSON，报告 provider/artifact/fallback 与退出码，严格无副作用。
 - **当前范围**：只读配置与工件诊断；不加载模型、不联网、不下载、不创建目录、不改变 capabilities schema。
 - **关键决策**：退出码固定 0/1/2；FunASR 动态缓存为 unknown/deferred；可选 word-align 缺失仅 WARN。
-- **已知阻塞**：等待 I2 合并与路线审计；解除条件：I2 context 与 capability 语义通过入口证据。
+- **已知阻塞**：无代码阻塞；I2 合并与路线审计已完成。CI workflow/status checks 缺失，不能伪称 CI 通过。
 - **推进前必须拿到的证据**：
-  - [ ] doctor unit/subprocess 矩阵全绿；环境：本地 venv；命令：`venv/bin/python -m pytest tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`
-  - [ ] 多 cwd、provider/artifact 与副作用行为；环境：本地临时目录；真实入口：从仓库根和任意 cwd 执行 `venv/bin/python scripts/doctor.py --json`，确认 stdout 仅一份 JSON。
+  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（16 passed）。
+  - [ ] 多 cwd、provider/artifact 与副作用行为的最终证据；环境：本地临时目录；真实入口：从仓库根和任意 cwd 执行 `venv/bin/python scripts/doctor.py --json`，确认 stdout 仅一份 JSON、stderr 分离且无副作用。
 
 ## I3 跨仓边界
 
@@ -50,10 +58,11 @@ I1 协议合并且 schema 稳定后，仅在 `VideoTranscriptAPI` 创建 issue #
 
 ## 路线图审计
 
-- **审计日期 / 增量**：2026-08-07 / PR #4，合并提交 `faf2fdb`
+- **审计日期 / 增量**：2026-08-07 / PR #4 → PR #5，合并提交 `faf2fdb`、`ec455bc`
 - **里程碑真完成了吗？**：是。I1 两轮 review 均 0 finding；I1 unit/入口证据记录为 104、109、35 passed；真实 HTTP/WS capability_id 一致，真实 ephemeral WS 已验证 queue_full→finalize retry 不重传且 terms 保持。仓库无 workflow/status checks，未获得 CI 证据，不伪称 CI 通过。
 - **下一个目标还是对的吗？**：是。I2 只消费 I1 已验证 terms，补齐 Qwen context 穿透后才提升 Qwen capability。
 - **有没有漏掉的里程碑？**：无；I3 已由 VideoTranscriptAPI issue #57 承接，保持跨仓 issue 边界。
 - **新证据是否改变了工作顺序？**：没有；I1 合并与审计完成后激活 I2，I4 仍后置。
 - **done 的定义还成立吗？**：是；各阶段仍需本地测试、真实入口和可追溯证据，CI 缺口单独标注，不以本地结果替代。
 - **审计结论**：保持 I1 → I2 → I4，I3 仅 issue #57，不进入本仓实现路线。
+- **I2 补充审计结论**：PR #5 两轮 review 0 finding；固定 context、旧协议、cache bypass、metadata 和 capabilities 边界有 unit/只读 probe 证据，真实 Qwen 模型入口因环境不可得明确记为例外；因此激活 I4。
