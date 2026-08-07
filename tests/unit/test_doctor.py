@@ -60,6 +60,15 @@ def test_doctor_artifact_reports_safe_type_and_size(tmp_path):
     model_dir.mkdir()
     assert describe_doctor_artifact(model_dir)["type"] == "directory"
 
+    if hasattr(os, "mkfifo"):
+        fifo = tmp_path / "model.pipe"
+        os.mkfifo(fifo)
+        assert describe_doctor_artifact(fifo) == {
+            "exists": True,
+            "type": "other",
+            "size": 0,
+        }
+
 
 def test_doctor_report_maps_provider_fallback_and_does_not_echo_paths(tmp_path):
     secret = "doctor-secret-token"
@@ -84,13 +93,30 @@ def test_doctor_report_maps_provider_fallback_and_does_not_echo_paths(tmp_path):
     assert secret not in json.dumps(report)
 
 
+def test_doctor_report_equal_provider_has_no_fallback(tmp_path):
+    artifact = {"exists": True, "type": "file", "size": 1}
+    report = build_doctor_report(
+        engine="qwen3",
+        runtime="cpu",
+        configured_provider="cpu",
+        available_providers=["CPUExecutionProvider"],
+        qwen_artifacts={"asr": artifact, "seg": artifact, "embed": artifact},
+        funasr_dynamic_cache="unknown",
+        word_align_artifact=artifact,
+    )
+    assert report["provider"]["fallback_would_occur"] is False
+    assert report["fallback_would_occur"] is False
+    assert report["errors"] == []
+    assert report["status"] == "ok"
+
+
 @pytest.mark.parametrize("cwd_kind", ["root", "script", "temporary"])
 def test_doctor_cli_is_cwd_independent_and_single_json(tmp_path, cwd_kind):
     cwd = {"root": ROOT, "script": DOCTOR.parent, "temporary": tmp_path}[cwd_kind]
     result = _run_doctor(cwd)
     assert result.returncode in {0, 1, 2}
     report = json.loads(result.stdout)
-    assert result.stdout.count("{") >= 1
+    assert len(result.stdout.splitlines()) == 1
     assert "provider" in report
     assert "fallback_would_occur" in report
     assert "artifacts" in report
@@ -121,6 +147,19 @@ def test_doctor_cli_qwen_artifact_matrix_and_optional_word_align(tmp_path):
     assert report["artifacts"]["word_align"]["exists"] is False
     assert any("word-align" in warning for warning in report["warnings"])
 
+    segmentation.write_bytes(b"")
+    failed = _run_doctor(
+        tmp_path,
+        FUNASR_DEFAULT_ENGINE="qwen3",
+        FUNASR_QWEN3_ASR_MODEL_DIR=str(asr_dir),
+        FUNASR_QWEN3_SEGMENTATION_MODEL=str(segmentation),
+        FUNASR_QWEN3_EMBEDDING_MODEL=str(embedding),
+    )
+    failed_report = json.loads(failed.stdout)
+    assert failed.returncode == 2
+    assert failed_report["status"] == "error"
+    assert "qwen_artifact_unavailable:segmentation_model" in failed_report["errors"]
+
 
 def test_doctor_cli_does_not_create_files_or_directories(tmp_path):
     before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
@@ -129,3 +168,19 @@ def test_doctor_cli_does_not_create_files_or_directories(tmp_path):
     assert result.returncode in {0, 1, 2}
     assert before == after
     json.loads(result.stdout)
+
+
+def test_doctor_cli_does_not_echo_secret_or_artifact_paths(tmp_path):
+    secret = "doctor-secret-path-token"
+    secret_path = tmp_path / secret
+    secret_path.write_bytes(b"artifact")
+    result = _run_doctor(
+        tmp_path,
+        FUNASR_DEFAULT_ENGINE="qwen3",
+        FUNASR_QWEN3_ASR_MODEL_DIR=str(secret_path),
+        FUNASR_QWEN3_SEGMENTATION_MODEL=str(secret_path),
+        FUNASR_QWEN3_EMBEDDING_MODEL=str(secret_path),
+    )
+    assert result.returncode == 1
+    assert secret not in result.stdout
+    assert secret not in result.stderr
