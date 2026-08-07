@@ -80,8 +80,6 @@ def _diagnose() -> tuple[dict[str, object], int]:
     report["errors"] = list(report["errors"]) + errors
     if errors:
         report["status"] = "error"
-    elif report["status"] == "error":
-        pass
     code = {"ok": 0, "warning": 1, "error": 2}[str(report["status"])]
     return report, code
 
