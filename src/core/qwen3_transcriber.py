@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional, Tuple, Union
 
 from loguru import logger
 
-from src.core.qwen3.asr import build_engine, run_asr
+from src.core.qwen3.asr import build_engine, build_qwen_context, run_asr
 from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
 from src.core.qwen3.diarize import (
     _load_audio_mono_16k,
@@ -802,6 +802,7 @@ class Qwen3DiarizeTranscriber:
         """
         options = options or TranscribeOptions()
         language = options.language
+        context = build_qwen_context(options.terms)
         start_time = time.time()
         loop = asyncio.get_event_loop()
 
@@ -823,6 +824,7 @@ class Qwen3DiarizeTranscriber:
                     engine,
                     language=self.language,
                     temperature=self.temperature,
+                    context=context,
                 ),
             )
             diarize_future = loop.run_in_executor(
@@ -854,6 +856,7 @@ class Qwen3DiarizeTranscriber:
                     engine,
                     language=self.language,
                     temperature=self.temperature,
+                    context=context,
                 ),
             )
             turns = []
