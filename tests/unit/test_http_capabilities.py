@@ -90,8 +90,9 @@ class _ClosedWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_websocket_connected_uses_same_capability_id(monkeypatch):
-    cfg = _config()
+@pytest.mark.parametrize("engine", ["funasr", "qwen3"])
+async def test_websocket_connected_uses_same_capability_id(monkeypatch, engine):
+    cfg = _config(engine=engine)
     monkeypatch.setattr(websocket_handler, "config", cfg)
     monkeypatch.setattr(websocket_handler, "detect_runtime", lambda: SimpleNamespace(name="cpu"))
     ep = _endpoints(cfg)
