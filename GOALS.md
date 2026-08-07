@@ -16,7 +16,7 @@
 - **关键决策**：raw 先限额，再 NFKC/trim/空白折叠/稳定去重；验证只由 FileUploadRequest 调用，任务只复制 effective terms；超限 fail-fast 为 invalid_terms。
 - **已知阻塞**：无。真实入口证据尚未取得，需在本地 server 与 CI 环境补齐。
 - **推进前必须拿到的证据**：
-  - [ ] 协议与回归 unit 全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_common_terms_protocol.py tests/unit/test_transcribe_options.py tests/unit/test_websocket_handler_engine.py`
+  - [ ] 协议与回归 unit 全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_common_terms_protocol.py tests/unit/test_transcribe_options.py tests/unit/test_websocket_handler_engine.py tests/unit/test_terms_cache_bypass.py`
   - [ ] 单文件空/非空/无效 terms 上传行为；环境：本地 dev server；真实入口：WebSocket `upload_request → upload_data`，确认 error.invalid_terms 与 task_complete。
   - [ ] 分片 authority 与 queue_full 重试；环境：本地 dev server；真实入口：WebSocket `upload_request → upload_chunk → finalize_upload`，确认不重传且 terms 不变。
   - [ ] FunASR 参数链与 capability_id；环境：CI；真实入口：HTTP `/capabilities` 与 WebSocket `connected`，确认 capability_id 一致。
