@@ -1,0 +1,131 @@
+"""I4 doctor contract: strict read-only diagnostics and safe JSON output."""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from src.core.doctor_diagnostics import build_doctor_report, describe_doctor_artifact
+
+
+ROOT = Path(__file__).resolve().parents[2]
+DOCTOR = ROOT / "scripts" / "doctor.py"
+
+
+def _run_doctor(cwd: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "FUNASR_NOTIFICATION_ENABLED": "false",
+            "FUNASR_RUNTIME": "cpu",
+            "FUNASR_QWEN3_ASR_ENCODER_PROVIDER": "cpu",
+            **env_overrides,
+        }
+    )
+    return subprocess.run(
+        [sys.executable, str(DOCTOR), "--json"],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def test_doctor_artifact_reports_safe_type_and_size(tmp_path):
+    missing = describe_doctor_artifact(tmp_path / "missing.onnx")
+    assert missing == {"exists": False, "type": "missing", "size": 0}
+
+    empty_file = tmp_path / "empty.onnx"
+    empty_file.touch()
+    assert describe_doctor_artifact(empty_file) == {
+        "exists": True,
+        "type": "file",
+        "size": 0,
+    }
+
+    model_file = tmp_path / "model.onnx"
+    model_file.write_bytes(b"model")
+    assert describe_doctor_artifact(model_file) == {
+        "exists": True,
+        "type": "file",
+        "size": 5,
+    }
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    assert describe_doctor_artifact(model_dir)["type"] == "directory"
+
+
+def test_doctor_report_maps_provider_fallback_and_does_not_echo_paths(tmp_path):
+    secret = "doctor-secret-token"
+    report = build_doctor_report(
+        engine="qwen3",
+        runtime="cpu",
+        configured_provider="cuda",
+        available_providers=["CPUExecutionProvider"],
+        qwen_artifacts={
+            "asr_model_dir": describe_doctor_artifact(tmp_path / secret),
+            "segmentation_model": {"exists": True, "type": "file", "size": 4},
+            "embedding_model": {"exists": True, "type": "file", "size": 4},
+        },
+        funasr_dynamic_cache="deferred",
+        word_align_artifact={"exists": False, "type": "missing", "size": 0},
+    )
+    assert report["provider"]["configured"] == "cuda"
+    assert report["provider"]["available"] == ["CPUExecutionProvider"]
+    assert report["provider"]["fallback_would_occur"] is True
+    assert report["fallback_would_occur"] is True
+    assert report["status"] == "error"
+    assert secret not in json.dumps(report)
+
+
+@pytest.mark.parametrize("cwd_kind", ["root", "script", "temporary"])
+def test_doctor_cli_is_cwd_independent_and_single_json(tmp_path, cwd_kind):
+    cwd = {"root": ROOT, "script": DOCTOR.parent, "temporary": tmp_path}[cwd_kind]
+    result = _run_doctor(cwd)
+    assert result.returncode in {0, 1, 2}
+    report = json.loads(result.stdout)
+    assert result.stdout.count("{") >= 1
+    assert "provider" in report
+    assert "fallback_would_occur" in report
+    assert "artifacts" in report
+    assert "doctor-secret-token" not in result.stdout
+    assert result.stderr == "" or "doctor" in result.stderr.lower()
+
+
+def test_doctor_cli_qwen_artifact_matrix_and_optional_word_align(tmp_path):
+    asr_dir = tmp_path / "asr"
+    asr_dir.mkdir()
+    segmentation = tmp_path / "segmentation.onnx"
+    segmentation.write_bytes(b"seg")
+    embedding = tmp_path / "embedding.onnx"
+    embedding.write_bytes(b"embed")
+    result = _run_doctor(
+        tmp_path,
+        FUNASR_DEFAULT_ENGINE="qwen3",
+        FUNASR_QWEN3_ASR_MODEL_DIR=str(asr_dir),
+        FUNASR_QWEN3_SEGMENTATION_MODEL=str(segmentation),
+        FUNASR_QWEN3_EMBEDDING_MODEL=str(embedding),
+        FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH=str(tmp_path / "optional.onnx"),
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert report["status"] == "warning"
+    assert report["artifacts"]["qwen"]["asr_model_dir"]["type"] == "directory"
+    assert report["artifacts"]["qwen"]["segmentation_model"]["size"] == 3
+    assert report["artifacts"]["word_align"]["exists"] is False
+    assert any("word-align" in warning for warning in report["warnings"])
+
+
+def test_doctor_cli_does_not_create_files_or_directories(tmp_path):
+    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    result = _run_doctor(tmp_path)
+    after = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    assert result.returncode in {0, 1, 2}
+    assert before == after
+    json.loads(result.stdout)
