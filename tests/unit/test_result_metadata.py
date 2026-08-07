@@ -18,6 +18,7 @@ from src.models.schemas import (
     TranscriptionResult,
     TranscriptionSegment,
     TranscriptionTask,
+    TaskStatus,
 )
 
 
@@ -172,6 +173,7 @@ class TestFreshExitMetadata:
         assert md["engine"] == "funasr"
         assert md["diarize"] is False
         assert md["projected"] is True, "funasr 照算出口投影 → projected=true"
+        assert "context_applied" not in md
         # 入库的结果不带 metadata 污染 (save 在投影/组装之前)
         saved = mock_db.save_result.call_args.args[0]
         assert saved.metadata is None
@@ -203,6 +205,68 @@ class TestFreshExitMetadata:
             "engine": "qwen3", "diarize": True, "word_align": False,
             "language": None, "projected": False,
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("output_format", ["json", "srt"])
+    async def test_funasr_terms_metadata_after_success(self, wa_off, tmp_path, output_format):
+        from src.core.task_manager import TaskManager
+
+        mgr = TaskManager()
+        path = tmp_path / "x.wav"
+        path.write_bytes(b"\0" * 100)
+        task = TranscriptionTask(
+            task_id=f"t-terms-{output_format}", file_name="x.wav", file_path=str(path),
+            file_size=100, file_hash="h", engine="funasr",
+            output_format=output_format, options=TranscribeOptions(terms=["Alpha", "Beta"]),
+        )
+        mgr.tasks[task.task_id] = task
+        source = make_diarized_result("h")
+        returned = (source, []) if output_format == "json" else {
+            "format": "srt", "content": "1\ntext", "file_name": "x.wav", "file_hash": "h",
+            "duration": 10.0, "processing_time": 0.5, "raw_result": [], "segments": source.segments,
+        }
+        fake = MagicMock(transcribe=AsyncMock(return_value=returned))
+        with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake), \
+             patch.object(mgr, "_notify_task_progress", new=AsyncMock()), \
+             patch.object(mgr, "_notify_task_complete", new=AsyncMock()), \
+             patch.object(mgr, "_maybe_delete_task_file", new=AsyncMock()):
+            await mgr._process_task(task.task_id)
+
+        assert task.status is TaskStatus.COMPLETED
+        assert task.result.metadata["context_applied"] is True
+        assert task.result.metadata["terms_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_funasr_terms_failure_has_no_metadata(self, wa_off, tmp_path):
+        from src.core.task_manager import TaskManager
+
+        mgr = TaskManager()
+        path = tmp_path / "x.wav"
+        path.write_bytes(b"\0" * 100)
+        task = TranscriptionTask(
+            task_id="t-terms-fail", file_name="x.wav", file_path=str(path), file_size=100,
+            file_hash="h", engine="funasr", retry_count=99,
+            options=TranscribeOptions(terms=["Alpha"]),
+        )
+        mgr.tasks[task.task_id] = task
+        fake = MagicMock(transcribe=AsyncMock(side_effect=RuntimeError("model failed")))
+        with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake), \
+             patch.object(mgr, "_notify_task_failed", new=AsyncMock()), \
+             patch.object(mgr, "_maybe_delete_task_file", new=AsyncMock()), \
+             patch.object(mgr, "_send_wework_notification", new=AsyncMock()):
+            await mgr._process_task(task.task_id)
+
+        assert task.status is TaskStatus.FAILED
+        assert task.result is None
+
+
+def test_terms_metadata_is_funasr_only():
+    funasr = build_result_metadata(engine="funasr", options=TranscribeOptions(terms=["Alpha"]))
+    qwen = build_result_metadata(engine="qwen3", options=TranscribeOptions(terms=["Alpha"]))
+    assert funasr["context_applied"] is True
+    assert funasr["terms_count"] == 1
+    assert "context_applied" not in qwen
+    assert "terms_count" not in qwen
 
 
 # ==================== 缓存命中出口组装 ====================
