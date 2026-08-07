@@ -337,7 +337,7 @@ def test_worker_parses_nested_options(tmp_path):
     task_file.write_text(json.dumps({
         "task_id": "t1", "audio_path": "/fake/a.wav",
         "source_audio_path": "/fake/a.wav", "output_format": "srt",
-        "options": {"language": "eng", "diarize": False},
+        "options": {"language": "eng", "diarize": False, "terms": ["Alpha"]},
     }), encoding="utf-8")
 
     captured = {}
@@ -346,6 +346,7 @@ def test_worker_parses_nested_options(tmp_path):
     assert isinstance(opts, TranscribeOptions)
     assert opts.language == "eng"
     assert opts.diarize is False
+    assert opts.terms == ["Alpha"]
 
 
 def test_worker_falls_back_to_flat_language_for_old_task_files(tmp_path):
@@ -365,6 +366,7 @@ def test_worker_falls_back_to_flat_language_for_old_task_files(tmp_path):
     assert isinstance(opts, TranscribeOptions)
     assert opts.language == "jpn"
     assert opts.diarize is True
+    assert opts.terms == []
 
 
 # ==================== funasr pool 协议: options 不进任务文件 ====================

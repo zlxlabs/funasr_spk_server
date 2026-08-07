@@ -68,7 +68,7 @@ async def test_http_capabilities_route_precedes_metrics_flag_and_upgrade(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("engine", "terms"), (("funasr", True), ("qwen3", False)))
+@pytest.mark.parametrize(("engine", "terms"), (("funasr", True), ("qwen3", True)))
 async def test_http_capabilities_engine_matrix(monkeypatch, engine, terms):
     monkeypatch.setattr(http_endpoints, "detect_runtime", lambda: SimpleNamespace(name="mac_ane"))
     ep = _endpoints(_config(engine=engine))

@@ -105,7 +105,7 @@ class WebSocketHandler:
             schema_version=1,
             engine=engine,
             runtime=detect_runtime().name,
-            features={"terms": engine == "funasr"},
+            features={"terms": engine in ("funasr", "qwen3")},
         )
     
     async def _authenticate(self, websocket: WebSocketServerProtocol) -> bool:

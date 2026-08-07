@@ -9,7 +9,8 @@ import pytest
 
 from src.core.qwen3.asr import ASRResult, _run_asr_loaded_audio, build_qwen_context
 from src.core.result_projection import build_result_metadata
-from src.models.schemas import TranscribeOptions
+from src.core.task_manager import TaskManager
+from src.models.schemas import TranscribeOptions, TranscriptionTask
 
 
 def _asr_result() -> ASRResult:
@@ -132,3 +133,24 @@ def test_qwen_context_metadata_is_success_only_and_engine_specific():
     assert qwen["context_applied"] is True and qwen["terms_count"] == 1
     assert "context_applied" not in empty
     assert "context_applied" in funasr
+
+
+@pytest.mark.asyncio
+async def test_qwen_nonempty_terms_bypass_cache_read_and_helpers(tmp_path):
+    audio = tmp_path / "qwen.wav"
+    audio.write_bytes(b"\0")
+    task = TranscriptionTask(
+        task_id="qwen-cache", file_name=audio.name, file_path=str(audio),
+        file_size=1, file_hash="qwen-cache", engine="qwen3",
+        options=TranscribeOptions(terms=["Alpha"]),
+    )
+    manager = TaskManager()
+    manager.tasks[task.task_id] = task
+
+    with patch("src.core.task_manager.db_manager") as db, \
+         patch("src.core.database.cache_params_for") as params:
+        db.get_cached_result = AsyncMock(return_value=None)
+        await manager.submit_task(task.task_id, str(audio))
+
+    db.get_cached_result.assert_not_awaited()
+    params.assert_not_called()
