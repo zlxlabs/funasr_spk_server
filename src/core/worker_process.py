@@ -128,7 +128,7 @@ def process_task(
             file_size = os.path.getsize(audio_path)
             print(f"  - 文件大小: {file_size / 1024 / 1024:.2f} MB")
         print(f"  - batch_size_s: {batch_size_s}")
-        print(f"  - hotword: '{hotword}'")
+        print(f"  - hotword_length={len(hotword)}")
 
         # ========== 诊断日志：检查设备状态 ==========
         import torch

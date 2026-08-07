@@ -71,7 +71,7 @@ async def test_chunked_session_captures_language(fake_ws):
         "total_chunks": 1,
         "language": "kor",
     }
-    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data)
+    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data, request=FileUploadRequest(**data))
     session = next(iter(handler.upload_sessions.values()))
     assert session.get("language") == "kor"
 

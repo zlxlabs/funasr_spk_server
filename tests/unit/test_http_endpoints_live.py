@@ -45,6 +45,7 @@ def _make_real_endpoints(host="127.0.0.1", metrics_token=None):
     cfg.observability.metrics_enabled = True
     cfg.observability.metrics_token = metrics_token
     cfg.server.host = host
+    cfg.transcription.default_engine = "funasr"
     return HttpEndpoints(task_manager=tm, db_manager=db, config=cfg)
 
 
@@ -66,6 +67,9 @@ async def test_live_health_metrics_and_ws_upgrade():
             r = await client.get(f"http://127.0.0.1:{port}/health")
             assert r.status_code == 200
             assert r.json()["status"] == "healthy"
+            capabilities = await client.get(f"http://127.0.0.1:{port}/capabilities?probe=live")
+            assert capabilities.status_code == 200
+            assert capabilities.json()["features"] == {"terms": True}
 
             # /metrics → 200 Prometheus text
             r2 = await client.get(f"http://127.0.0.1:{port}/metrics")

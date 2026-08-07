@@ -25,12 +25,26 @@ import tempfile
 import os
 import time
 import uuid
+from pydantic import ValidationError
+from src.core.capabilities import build_asr_capabilities
+from src.core.runtime import detect_runtime
 
 
 # 批量状态查询的 task_ids 硬上限（控帧大小）。超出截断 + warn。
 # 长音频 JSON 50 份单帧可能数 MB，靠"client 把已完成 id 移出轮询集、每 result 只发一次"摊平。
 # 50 是起步硬上限，实测帧过大再降。
 TASK_STATUS_BATCH_MAX = 50
+
+
+def _invalid_terms_reason(validation_error: ValidationError) -> Optional[str]:
+    """从 Pydantic errors() 精确提取 invalid_terms 的 reason。"""
+    for detail in validation_error.errors():
+        if detail.get("type") != "invalid_terms":
+            continue
+        reason = (detail.get("ctx") or {}).get("reason")
+        if reason:
+            return str(reason)
+    return None
 
 
 class WebSocketHandler:
@@ -61,7 +75,8 @@ class WebSocketHandler:
             await self._send_message(websocket, "connected", {
                 "connection_id": connection_id,
                 "message": "连接成功",
-                "server_time": datetime.now().isoformat()
+                "server_time": datetime.now().isoformat(),
+                "capabilities": self._build_capabilities(),
             })
             
             # 处理消息
@@ -82,6 +97,16 @@ class WebSocketHandler:
         finally:
             # 清理连接
             self._cleanup_connection(connection_id)
+
+    def _build_capabilities(self) -> dict[str, object]:
+        """Compose the same minimal capability contract advertised over HTTP."""
+        engine = config.transcription.default_engine
+        return build_asr_capabilities(
+            schema_version=1,
+            engine=engine,
+            runtime=detect_runtime().name,
+            features={"terms": engine == "funasr"},
+        )
     
     async def _authenticate(self, websocket: WebSocketServerProtocol) -> bool:
         """认证WebSocket连接"""
@@ -145,6 +170,13 @@ class WebSocketHandler:
 
         elif msg_type == "finalize_upload":
             # 显式重试 finalize（高负载止血：queue_full 后客户端不重传大文件，仅重发此消息）
+            if "terms" in msg_data:
+                await self._send_error(
+                    websocket,
+                    "protocol_error",
+                    "finalize_upload 不允许 terms 字段",
+                )
+                return
             task_id = msg_data.get("task_id")
             if task_id:
                 await self._handle_finalize_upload(websocket, task_id)
@@ -208,7 +240,9 @@ class WebSocketHandler:
             
             if upload_mode == "chunked":
                 # 处理分片上传请求
-                await self._handle_chunked_upload_request(websocket, connection_id, data)
+                await self._handle_chunked_upload_request(
+                    websocket, connection_id, data, request=request
+                )
                 return
             
             # 创建任务（单文件模式）
@@ -222,7 +256,8 @@ class WebSocketHandler:
             
             # 检查缓存（如果不强制刷新）
             # cache key 含 engine; word_align / diarize 折维收拢在 cache_params_for (D4)
-            if not request.force_refresh:
+            from src.core.database import cache_allowed_for
+            if not request.force_refresh and cache_allowed_for(task.options):
                 from src.core.database import db_manager, cache_params_for
                 _ce, _allow = cache_params_for(task)
                 cached_result = await db_manager.get_cached_result(
@@ -269,6 +304,18 @@ class WebSocketHandler:
                 "message": "准备接收文件数据"
             })
             
+        except ValidationError as e:
+            reason = _invalid_terms_reason(e)
+            if reason:
+                await self._send_message(websocket, "error", {
+                    "error": "invalid_terms",
+                    "reason": reason,
+                    "message": "术语列表校验失败",
+                })
+                return
+            validation_summary = [(detail.get("type"), detail.get("loc")) for detail in e.errors()]
+            logger.error("处理上传请求失败: validation_errors={}", validation_summary)
+            await self._send_error(websocket, "upload_error", "上传请求参数无效")
         except Exception as e:
             logger.error(f"处理上传请求失败: {e}")
             await self._send_error(websocket, "upload_error", str(e))
@@ -569,7 +616,13 @@ class WebSocketHandler:
         
         logger.debug(f"连接已清理: {connection_id}")
     
-    async def _handle_chunked_upload_request(self, websocket: WebSocketServerProtocol, connection_id: str, data: dict):
+    async def _handle_chunked_upload_request(
+        self,
+        websocket: WebSocketServerProtocol,
+        connection_id: str,
+        data: dict,
+        request: FileUploadRequest,
+    ):
         """处理分片上传请求"""
         try:
             # 先清遗弃 session（机会式 sweep），再做硬数量上限准入控制，
@@ -591,27 +644,29 @@ class WebSocketHandler:
             # 创建上传会话
             session = {
                 "task_id": task_id,
-                "file_name": data["file_name"],
-                "file_size": data["file_size"],
-                "file_hash": data["file_hash"],
+                "file_name": request.file_name,
+                "file_size": request.file_size,
+                "file_hash": request.file_hash,
                 "chunk_size": data.get("chunk_size", 1024 * 1024),  # 默认1MB
                 "total_chunks": data["total_chunks"],
                 "received_chunks": 0,
                 "temp_file_path": temp_file.name,
                 "temp_file": temp_file,
                 "chunks_received": set(),  # 记录已收到的分片索引
-                "output_format": data.get("output_format", "json"),
-                "force_refresh": data.get("force_refresh", False),
+                "output_format": request.output_format,
+                "force_refresh": request.force_refresh,
                 "connection_id": connection_id,
                 # PR1: 记录引擎选择，最终化时回填到 FileUploadRequest
-                "engine": data.get("engine"),
+                "engine": request.engine,
                 # 词级时间戳: 记录 per-request 语言，最终化时回填
-                "language": data.get("language"),
+                "language": request.language,
                 # diarize 开关: 记录 per-request 值，最终化时回填（缺省 True 向后兼容）
-                "diarize": data.get("diarize", True),
+                "diarize": request.diarize,
                 # word_align 开关: 记录 per-request 原始值（None=未指定），最终化时回填。
                 # codex #2: 早返回缓存路径 (_finalize 内 create_task 之前) 须用此值解析 effective。
-                "word_align": data.get("word_align"),
+                "word_align": request.word_align,
+                "terms": list(request.terms),
+                "request": request,
                 # 高负载止血: session 状态机 + TTL 时间戳
                 # state: uploading → (收齐) ready → (提交成功) submitted；queue_full 时回到 ready 供重试
                 "state": "uploading",
@@ -732,23 +787,28 @@ class WebSocketHandler:
             # cache key 含 engine（session 中已记录，无则回退 default_engine）;
             # word_align / diarize 折维收拢在 cache_params (D4, 此处无 task 对象走低层入口)
             if not session["force_refresh"]:
-                from src.core.database import db_manager, cache_params
                 from src.core.config import config as _config
                 from src.models.schemas import TranscribeOptions, resolve_word_align
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
                 _session_options = TranscribeOptions(
                     language=session.get("language"),
                     diarize=session.get("diarize", True),
+                    terms=list(session.get("terms", [])),
                     # 决策 1A: 早返回缓存路径同样解析 effective word_align（请求 > config 兜底）
                     word_align=resolve_word_align(
                         session.get("word_align"), _config.qwen3.word_align_enabled
                     ),
                 )
-                _ce, _allow = cache_params(_engine_for_cache, _session_options)
-                cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
-                    options=_session_options,
-                )
+                from src.core.database import cache_allowed_for
+                if cache_allowed_for(_session_options):
+                    from src.core.database import db_manager, cache_params
+                    _ce, _allow = cache_params(_engine_for_cache, _session_options)
+                    cached_result = await db_manager.get_cached_result(
+                        session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
+                        options=_session_options,
+                    )
+                else:
+                    cached_result = None
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")
 
@@ -794,20 +854,22 @@ class WebSocketHandler:
                 file_path, _ = await save_uploaded_file(file_data, session["file_name"])
                 session["finalized_file_path"] = file_path
 
-            # 创建任务请求对象
-            # PR1: 分片上传完成时把 session 中记录的 engine 回填到 request
-            from src.models.schemas import FileUploadRequest
-            request = FileUploadRequest(
-                file_name=session["file_name"],
-                file_size=session["file_size"],
-                file_hash=session["file_hash"],
-                force_refresh=session["force_refresh"],
-                output_format=session["output_format"],
-                engine=session.get("engine"),
-                language=session.get("language"),
-                diarize=session.get("diarize", True),
-                word_align=session.get("word_align"),
-            )
+            request = session.get("request")
+            if request is None:
+                # 旧内存 session 没有 request 字段时只按旧字段兼容恢复；terms 缺失为空。
+                from src.models.schemas import FileUploadRequest
+                request = FileUploadRequest(
+                    file_name=session["file_name"],
+                    file_size=session["file_size"],
+                    file_hash=session["file_hash"],
+                    force_refresh=session["force_refresh"],
+                    output_format=session["output_format"],
+                    engine=session.get("engine"),
+                    language=session.get("language"),
+                    diarize=session.get("diarize", True),
+                    word_align=session.get("word_align"),
+                    terms=session.get("terms", []),
+                )
 
             # 创建任务 + 提交队列
             from src.core.task_manager import task_manager, QueueFullError

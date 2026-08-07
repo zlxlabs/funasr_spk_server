@@ -21,7 +21,7 @@ from src.core.result_projection import (
     project_result_nospk,
     segments_to_srt_text,
 )
-from src.models.schemas import TranscriptionResult
+from src.models.schemas import TranscribeOptions, TranscriptionResult
 
 
 # 数据库 schema 当前期望的引擎列默认值（迁移和旧调用兼容时使用）
@@ -125,6 +125,11 @@ def cache_params(engine: str, options, output_format: str = "json") -> tuple:
 def cache_params_for(task) -> tuple:
     """cache_params 的 TranscriptionTask 便捷入口 — 消灭各处手写折维参数."""
     return cache_params(task.engine, task.options, task.output_format)
+
+
+def cache_allowed_for(options: TranscribeOptions) -> bool:
+    """有效 terms 不得命中或写入普通缓存；空 terms 保持旧缓存语义。"""
+    return not options.terms
 
 
 def cache_save_engine_for(task, has_words: bool) -> str:

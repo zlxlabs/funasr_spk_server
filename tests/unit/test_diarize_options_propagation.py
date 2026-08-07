@@ -127,7 +127,7 @@ async def test_chunked_session_captures_diarize(fake_ws):
         "file_name": "x.wav", "file_size": 10000, "file_hash": "h-x",
         "total_chunks": 1, "diarize": False,
     }
-    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data)
+    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data, request=FileUploadRequest(**data))
     session = next(iter(handler.upload_sessions.values()))
     assert session.get("diarize") is False
 
@@ -185,7 +185,7 @@ async def test_chunked_session_captures_word_align(fake_ws):
         "file_name": "x.wav", "file_size": 10000, "file_hash": "h-wa",
         "total_chunks": 1, "word_align": True,
     }
-    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data)
+    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data, request=FileUploadRequest(**data))
     session = next(iter(handler.upload_sessions.values()))
     assert session.get("word_align") is True
 

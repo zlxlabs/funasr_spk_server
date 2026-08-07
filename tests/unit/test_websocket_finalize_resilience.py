@@ -34,7 +34,7 @@ def fake_ws():
     return ws
 
 
-def setup_session(handler, tmp_path, content=b"hello-world-audio", state="uploading"):
+def setup_session(handler, tmp_path, content=b"hello-world-audio", state="uploading", terms=None):
     """构造一个分片已收齐、hash 匹配的 session（force_refresh 跳过缓存分支）"""
     temp = tmp_path / "chunk.bin"
     temp.write_bytes(content)
@@ -46,7 +46,7 @@ def setup_session(handler, tmp_path, content=b"hello-world-audio", state="upload
         "temp_file_path": str(temp), "chunks_received": {0},
         "output_format": "json", "force_refresh": True,
         "connection_id": "c1", "engine": "qwen3", "language": None,
-        "diarize": True, "word_align": None,
+        "diarize": True, "word_align": None, "terms": list(terms or []),
         "state": state, "created_at": time.time(),
     }
     return task_id, temp
@@ -60,6 +60,58 @@ def sent_types(send_msg_mock, send_err_mock):
 
 
 class TestQueueFullMapping:
+    @pytest.mark.asyncio
+    async def test_queue_full_finalize_retry_preserves_terms_and_reuses_file(
+        self, handler, fake_ws, tmp_path,
+    ):
+        from src.models.schemas import FileUploadRequest, TranscribeOptions, TranscriptionTask
+
+        task_id, temp = setup_session(handler, tmp_path, terms=["Alpha", "Beta"])
+        request = FileUploadRequest(
+            file_name="a.wav", file_size=len(b"hello-world-audio"),
+            file_hash=hashlib.md5(b"hello-world-audio").hexdigest(),
+            engine="qwen3", terms=["Alpha", "Beta"],
+        )
+        handler.upload_sessions[task_id]["request"] = request
+        final = tmp_path / "final.wav"
+        created = []
+        created_tasks = []
+
+        async def create_task(req, task_id):
+            created.append(req)
+            task = TranscriptionTask(
+                task_id=task_id, file_name="a.wav", file_path=str(final),
+                file_size=10, file_hash=req.file_hash, engine="qwen3",
+                options=TranscribeOptions(terms=list(req.terms)),
+            )
+            created_tasks.append(task)
+            return task
+
+        async def save_file(data, file_name):
+            final.write_bytes(data)
+            return str(final), None
+
+        saved = AsyncMock(side_effect=save_file)
+        with patch("src.core.task_manager.task_manager") as tm, \
+             patch("src.utils.file_utils.save_uploaded_file", new=saved), \
+             patch.object(handler, "_send_message", new=AsyncMock()), \
+             patch.object(handler, "_send_error", new=AsyncMock()):
+            tm.create_task = AsyncMock(side_effect=create_task)
+            tm.submit_task = AsyncMock(side_effect=[
+                QueueFullError(retry_after=30, queue_size=20, max_queue_size=20), None,
+            ])
+            await handler._finalize_chunked_upload(fake_ws, task_id)
+            assert handler.upload_sessions[task_id]["state"] == "ready"
+            assert handler.upload_sessions[task_id]["terms"] == ["Alpha", "Beta"]
+            await handler._handle_finalize_upload(fake_ws, task_id)
+
+        assert len(created) == 2
+        assert created[0] is created[1]
+        assert all(task.options.terms == ["Alpha", "Beta"] for task in created_tasks)
+        assert saved.await_count == 1
+        assert tm.submit_task.await_count == 2
+        assert handler.upload_sessions == {}
+
     @pytest.mark.asyncio
     async def test_queue_full_sends_queue_full_message(self, handler, fake_ws, tmp_path):
         task_id, temp = setup_session(handler, tmp_path)

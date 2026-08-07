@@ -139,13 +139,15 @@ class FunASRTranscriber:
     ) -> Union[TranscriptionResult, str, Dict[str, Any]]:
         """转录音频文件 - 使用与测试脚本相同的方法
 
-        options: per-request 转录选项（仅为与 Qwen3 transcribe 签名对齐，由
-        task_manager 统一透传）。FunASR 引擎不消费 language；diarize=False 的
+        options: per-request 转录选项（由 task_manager 统一透传）；terms 只在本层
+        space-join 为 FunASR hotword，options 本身不进入 FunASR 任务文件。引擎不消费 language；diarize=False 的
         语义由 serve 层出口投影实现（D4: cam++ 提取无 per-call 开关，照算后
-        投影抹 speaker），引擎内接受后忽略，options 不进 funasr 任务文件。
+        投影抹 speaker），引擎内接受后忽略。
         """
         if not self.is_initialized:
             await self.initialize()
+
+        hotword = " ".join(options.terms) if options else ""
         
         start_time = time.time()
         original_path = audio_path
@@ -219,7 +221,7 @@ class FunASRTranscriber:
                     result = await self.model_pool.generate_with_pool(
                         audio_path=audio_path,
                         batch_size_s=self.config["funasr"]["batch_size_s"],
-                        hotword=''
+                        hotword=hotword
                     )
                 else:
                     # 使用线程锁保护模型访问，解决并发VAD错误
@@ -230,7 +232,7 @@ class FunASRTranscriber:
                             result = self.model.generate(
                                 input=audio_path,  # 直接使用原始音频文件
                                 batch_size_s=self.config["funasr"]["batch_size_s"],
-                                hotword=''
+                                hotword=hotword
                             )
                             logger.debug(f"释放模型锁，处理完成: {os.path.basename(audio_path)}")
                             return result
