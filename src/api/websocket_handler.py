@@ -26,6 +26,8 @@ import os
 import time
 import uuid
 from pydantic import ValidationError
+from src.core.capabilities import build_asr_capabilities
+from src.core.runtime import detect_runtime
 
 
 # 批量状态查询的 task_ids 硬上限（控帧大小）。超出截断 + warn。
@@ -73,7 +75,8 @@ class WebSocketHandler:
             await self._send_message(websocket, "connected", {
                 "connection_id": connection_id,
                 "message": "连接成功",
-                "server_time": datetime.now().isoformat()
+                "server_time": datetime.now().isoformat(),
+                "capabilities": self._build_capabilities(),
             })
             
             # 处理消息
@@ -94,6 +97,16 @@ class WebSocketHandler:
         finally:
             # 清理连接
             self._cleanup_connection(connection_id)
+
+    def _build_capabilities(self) -> dict[str, object]:
+        """Compose the same minimal capability contract advertised over HTTP."""
+        engine = config.transcription.default_engine
+        return build_asr_capabilities(
+            schema_version=1,
+            engine=engine,
+            runtime=detect_runtime().name,
+            features={"terms": engine == "funasr"},
+        )
     
     async def _authenticate(self, websocket: WebSocketServerProtocol) -> bool:
         """认证WebSocket连接"""

@@ -34,7 +34,9 @@ from urllib.parse import urlsplit, parse_qs
 
 from loguru import logger
 
+from src.core.capabilities import build_asr_capabilities
 from src.core import gpu_mem
+from src.core.runtime import detect_runtime
 
 
 # /metrics 指标前缀
@@ -182,10 +184,6 @@ class HttpEndpoints:
 
     async def process_request(self, path, request_headers):
         """websockets 12.0 legacy 回调. 命中 /health|/metrics 返响应, 否则 None 走 ws."""
-        obs = self._cfg.observability
-        if not obs.metrics_enabled:
-            return None  # 端点总开关关 → 退回纯 ws
-
         # ⚠️ ws 握手请求 (Upgrade: websocket) 一律放行 (返 None), 不被 HTTP 端点劫持。
         # 否则客户端连 ws://host:port/ (根路径) 会被 HTML 状态页拦成 HTTP 200 → 握手失败
         # "无法连接到服务器" (生产事故 2026-06-17)。不管什么路径, 有 Upgrade 头就是 ws。
@@ -194,6 +192,13 @@ class HttpEndpoints:
             return None
 
         route = urlsplit(path).path
+        if route == "/capabilities":
+            return _json_response(200, self._build_capabilities())
+
+        obs = self._cfg.observability
+        if not obs.metrics_enabled:
+            return None  # 端点总开关关 → 退回纯 ws
+
         if route == "/":
             # 极简状态页: 静态 HTML/JS, 不嵌 secret. token 由用户在 URL ?token= 提供,
             # 页面 JS 读自己的 location.search 去 fetch /metrics (localhost 无 token 直开 /).
@@ -216,6 +221,16 @@ class HttpEndpoints:
             return _text_response(200, text)
 
         return None  # 非端点路径 → ws 升级
+
+    def _build_capabilities(self) -> dict[str, object]:
+        """Compose capabilities from the configured engine and effective runtime."""
+        engine = self._cfg.transcription.default_engine
+        return build_asr_capabilities(
+            schema_version=1,
+            engine=engine,
+            runtime=detect_runtime().name,
+            features={"terms": engine == "funasr"},
+        )
 
     def _maintenance_alive(self) -> bool:
         t = getattr(self._tm, "_maintenance_task", None)
