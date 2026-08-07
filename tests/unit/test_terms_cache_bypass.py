@@ -13,13 +13,13 @@ from src.models.schemas import (
 )
 
 
-def _task(tmp_path, *, task_id="terms-cache", output_format="json", terms=None):
+def _task(tmp_path, *, task_id="terms-cache", output_format="json", terms=None, engine="funasr"):
     audio = tmp_path / f"{task_id}.wav"
     audio.write_bytes(b"\0" * 10)
     return TranscriptionTask(
         task_id=task_id, file_name=audio.name, file_path=str(audio), file_size=10,
         file_hash=task_id, output_format=output_format,
-        options=TranscribeOptions(terms=terms or []),
+        engine=engine, options=TranscribeOptions(terms=terms or []),
     )
 
 
@@ -44,9 +44,10 @@ def test_cache_allowed_for_terms_is_pure_and_empty_compatible():
 
 
 @pytest.mark.asyncio
-async def test_submit_terms_skips_cache_read(tmp_path):
+@pytest.mark.parametrize("engine", ["funasr", "qwen3"])
+async def test_submit_terms_skips_cache_read(tmp_path, engine):
     manager = TaskManager()
-    task = _task(tmp_path, terms=["Alpha"])
+    task = _task(tmp_path, terms=["Alpha"], engine=engine)
     manager.tasks[task.task_id] = task
     with patch("src.core.task_manager.db_manager") as db, \
          patch("src.core.database.cache_params_for") as params:
@@ -58,9 +59,13 @@ async def test_submit_terms_skips_cache_read(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_format", ["json", "srt"])
-async def test_worker_terms_skips_second_read_and_result_write(tmp_path, output_format):
+@pytest.mark.parametrize("engine", ["funasr", "qwen3"])
+async def test_worker_terms_skips_second_read_and_result_write(tmp_path, output_format, engine):
     manager = TaskManager()
-    task = _task(tmp_path, task_id=f"terms-{output_format}", output_format=output_format, terms=["Alpha"])
+    task = _task(
+        tmp_path, task_id=f"terms-{engine}-{output_format}", output_format=output_format,
+        terms=["Alpha"], engine=engine,
+    )
     manager.tasks[task.task_id] = task
     transcriber = MagicMock(transcribe=AsyncMock(return_value=_result(task.task_id, output_format)))
     with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=transcriber), \
