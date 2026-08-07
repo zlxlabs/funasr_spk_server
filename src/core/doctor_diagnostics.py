@@ -1,34 +1,16 @@
 """Pure, explicit-input diagnostics used by the read-only doctor CLI."""
 from __future__ import annotations
 
-import copy
+import os
 import stat
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
-from src.core.config_profiles import PROFILES
+if TYPE_CHECKING:
+    from src.core.config import Config
 
 
-_DEFAULTS = {
-    "transcription": {"default_engine": "funasr"},
-    "qwen3": {
-        "asr_model_dir": "./models/qwen3_diarize/Qwen3-ASR-1.7B",
-        "segmentation_model": "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx",
-        "embedding_model": "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx",
-        "word_align_model_path": "./models/qwen3_diarize/ctc_forced_aligner/model.onnx",
-        "asr_encoder_provider": "auto",
-    },
-}
-_ENV_FIELDS = {
-    "FUNASR_DEFAULT_ENGINE": ("transcription", "default_engine"),
-    "FUNASR_QWEN3_ASR_ENCODER_PROVIDER": ("qwen3", "asr_encoder_provider"),
-    "FUNASR_QWEN3_ASR_MODEL_DIR": ("qwen3", "asr_model_dir"),
-    "FUNASR_QWEN3_SEGMENTATION_MODEL": ("qwen3", "segmentation_model"),
-    "FUNASR_QWEN3_EMBEDDING_MODEL": ("qwen3", "embedding_model"),
-    "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH": ("qwen3", "word_align_model_path"),
-}
 _SUPPORTED_ENGINES = {"funasr", "qwen3"}
-_SUPPORTED_RUNTIMES = {"cpu", "cuda", "mac_ane"}
 _PROVIDER_NAMES = {
     "auto",
     "cpu",
@@ -40,112 +22,18 @@ _PROVIDER_NAMES = {
 }
 
 
-def _merge_mapping(base: dict[str, object], override: Mapping[str, object]) -> None:
-    for key, value in override.items():
-        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
-            _merge_mapping(base[key], value)  # type: ignore[arg-type]
-        else:
-            base[key] = copy.deepcopy(value)
-
-
-def resolve_doctor_config(
-    config_data: object,
-    dotenv_values: Mapping[str, object],
-    process_env: Mapping[str, object],
-) -> dict[str, object]:
-    """Resolve doctor inputs using defaults < config < profile < environment."""
-    errors: list[str] = []
-    warnings: list[str] = []
-    resolved = copy.deepcopy(_DEFAULTS)
-    transcription_invalid = False
-    qwen_invalid = False
-    if isinstance(config_data, Mapping):
-        transcription = config_data.get("transcription", {})
-        qwen = config_data.get("qwen3", {})
-        if isinstance(transcription, Mapping):
-            _merge_mapping(resolved["transcription"], transcription)  # type: ignore[arg-type]
-        else:
-            transcription_invalid = True
-        if isinstance(qwen, Mapping):
-            _merge_mapping(resolved["qwen3"], qwen)  # type: ignore[arg-type]
-        else:
-            qwen_invalid = True
-    else:
-        errors.append("configuration_root_invalid")
-
-    environment = dict(dotenv_values)
-    environment.update(process_env)
-    profile_name = environment.get("FUNASR_PROFILE", "")
-    profile_text = profile_name.strip().lower() if isinstance(profile_name, str) else ""
-    if profile_text:
-        profile = PROFILES.get(profile_text)
-        if profile is None:
-            warnings.append("unknown_profile")
-        else:
-            _merge_mapping(resolved, profile)
-            if isinstance(profile.get("transcription"), Mapping):
-                transcription_invalid = False
-            if isinstance(profile.get("qwen3"), Mapping):
-                qwen_invalid = False
-    for env_name, (section_name, field_name) in _ENV_FIELDS.items():
-        if env_name in environment and environment[env_name] is not None:
-            resolved[section_name][field_name] = environment[env_name]  # type: ignore[index]
-
-    transcription = resolved.get("transcription")
-    qwen3 = resolved.get("qwen3")
-    transcription = transcription if isinstance(transcription, Mapping) else {}
-    qwen3 = qwen3 if isinstance(qwen3, Mapping) else {}
-    engine_value = transcription.get("default_engine")
-    if not isinstance(engine_value, str) or not engine_value.strip():
-        errors.append("invalid_engine_type")
-        engine = "unknown"
-    else:
-        engine = engine_value.strip().lower()
-        if engine not in _SUPPORTED_ENGINES:
-            errors.append("unsupported_engine")
-            engine = "unknown"
-    if transcription_invalid:
-        errors.append("configuration_section_invalid:transcription")
-    if qwen_invalid:
-        errors.append("configuration_section_invalid:qwen3")
-
-    provider_value = qwen3.get("asr_encoder_provider")
-    if engine == "qwen3":
-        if provider_value is None or not isinstance(provider_value, str):
-            errors.append("invalid_provider_type")
-            provider = "unknown"
-        elif not provider_value.strip():
-            provider = "auto"
-        else:
-            provider = provider_value.strip().lower()
-    else:
-        provider = "not_applicable"
-
-    qwen_paths: dict[str, object] = {}
-    for field_name in ("asr_model_dir", "segmentation_model", "embedding_model", "word_align_model_path"):
-        value = qwen3.get(field_name)
-        if field_name == "word_align_model_path":
-            qwen_paths[field_name] = value if isinstance(value, str) else ""
-        elif engine == "qwen3" and (not isinstance(value, str) or not value.strip()):
-            errors.append(f"invalid_artifact_path:{field_name}")
-            qwen_paths[field_name] = ""
-        elif isinstance(value, str) and value.strip():
-            qwen_paths[field_name] = value
-        else:
-            qwen_paths[field_name] = ""
-
-    runtime_value = environment.get("FUNASR_RUNTIME", "")
-    runtime_override = runtime_value.strip().lower() if isinstance(runtime_value, str) else ""
-    if runtime_override and runtime_override not in _SUPPORTED_RUNTIMES:
-        errors.append("unsupported_runtime")
-        runtime_override = ""
+def doctor_config_snapshot(config: "Config") -> dict[str, object]:
+    """提取真实 Config 已解析字段，供只读 doctor 父进程做路径探测。"""
     return {
-        "engine": engine,
-        "provider": provider,
-        "runtime_override": runtime_override,
-        "qwen_paths": qwen_paths,
-        "errors": errors,
-        "warnings": warnings,
+        "engine": config.transcription.default_engine,
+        "provider": config.qwen3.asr_encoder_provider or "auto",
+        "runtime_override": os.getenv("FUNASR_RUNTIME", "").strip().lower(),
+        "qwen_paths": {
+            "asr_model_dir": config.qwen3.asr_model_dir,
+            "segmentation_model": config.qwen3.segmentation_model,
+            "embedding_model": config.qwen3.embedding_model,
+            "word_align_model_path": config.qwen3.word_align_model_path,
+        },
     }
 
 

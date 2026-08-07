@@ -13,7 +13,6 @@ import pytest
 from src.core.doctor_diagnostics import (
     build_doctor_report,
     describe_doctor_artifact,
-    resolve_doctor_config,
 )
 
 
@@ -51,12 +50,26 @@ def _doctor_fixture(tmp_path, config_data, dotenv_text="", process_env=None):
     shutil.copy(DOCTOR, root / "scripts" / "doctor.py")
     shutil.copy(ROOT / "src" / "core" / "doctor_diagnostics.py", root / "src" / "core" / "doctor_diagnostics.py")
     shutil.copy(ROOT / "src" / "core" / "config_profiles.py", root / "src" / "core" / "config_profiles.py")
-    (root / "config.json").write_text(json.dumps(config_data), encoding="utf-8")
+    shutil.copy(ROOT / "src" / "core" / "config.py", root / "src" / "core" / "config.py")
+    shutil.copy(ROOT / "src" / "core" / "runtime.py", root / "src" / "core" / "runtime.py")
+    shutil.copy(ROOT / "src" / "core" / "doctor_config_probe.py", root / "src" / "core" / "doctor_config_probe.py")
+    if isinstance(config_data, bytes):
+        (root / "config.json").write_bytes(config_data)
+    elif isinstance(config_data, str):
+        (root / "config.json").write_text(config_data, encoding="utf-8")
+    else:
+        (root / "config.json").write_text(json.dumps(config_data), encoding="utf-8")
     (root / ".env").write_text(dotenv_text, encoding="utf-8")
+    result = _run_fixture_doctor(root, process_env)
+    return root, result
+
+
+def _run_fixture_doctor(root: Path, process_env=None):
+    """在隔离 fixture 中执行 doctor，避免继承本机 FUNASR_* 污染。"""
     env = {key: value for key, value in os.environ.items() if not key.startswith("FUNASR_")}
     env.update({"FUNASR_NOTIFICATION_ENABLED": "false", "PYTHONDONTWRITEBYTECODE": "1"})
     env.update(process_env or {})
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, str(root / "scripts" / "doctor.py"), "--json"],
         cwd=root,
         env=env,
@@ -65,7 +78,8 @@ def _doctor_fixture(tmp_path, config_data, dotenv_text="", process_env=None):
         timeout=5,
         check=False,
     )
-    return root, result
+
+
 def test_doctor_artifact_reports_safe_type_and_size(tmp_path):
     missing = describe_doctor_artifact(tmp_path / "missing.onnx")
     assert missing == {"exists": False, "type": "missing", "size": 0}
@@ -143,51 +157,6 @@ def test_doctor_report_equal_provider_has_no_fallback(tmp_path):
     assert report["status"] == "ok"
 
 
-def test_doctor_effective_config_uses_dotenv_profile_then_process_env():
-    result = resolve_doctor_config(
-        {"transcription": {"default_engine": "funasr"}},
-        {"FUNASR_PROFILE": "cuda_dev", "FUNASR_DEFAULT_ENGINE": "funasr"},
-        {"FUNASR_DEFAULT_ENGINE": "qwen3"},
-    )
-    assert result["engine"] == "qwen3"
-    assert result["provider"] == "cuda"
-    assert result["errors"] == []
-
-
-@pytest.mark.parametrize("section", ["transcription", "qwen3"])
-@pytest.mark.parametrize("invalid_value", [None, [], "invalid"])
-def test_doctor_invalid_section_is_fatal_without_profile(tmp_path, section, invalid_value):
-    _, result = _doctor_fixture(tmp_path, {section: invalid_value})
-    report = json.loads(result.stdout)
-    assert result.returncode == 2
-    assert report["status"] == "error"
-    assert f"configuration_section_invalid:{section}" in report["errors"]
-
-
-@pytest.mark.parametrize("section", ["transcription", "qwen3"])
-@pytest.mark.parametrize("profile", ["cuda_dev", "mac_dev"])
-@pytest.mark.parametrize("invalid_value", [None, [], "invalid"])
-def test_doctor_profile_mapping_replaces_invalid_section(tmp_path, section, profile, invalid_value):
-    _, result = _doctor_fixture(
-        tmp_path,
-        {section: invalid_value},
-        f"FUNASR_PROFILE={profile}\n",
-    )
-    report = json.loads(result.stdout)
-    assert f"configuration_section_invalid:{section}" not in report["errors"]
-
-
-def test_doctor_field_env_does_not_repair_invalid_section(tmp_path):
-    _, result = _doctor_fixture(
-        tmp_path,
-        {"qwen3": None},
-        process_env={"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": "cpu"},
-    )
-    report = json.loads(result.stdout)
-    assert result.returncode == 2
-    assert "configuration_section_invalid:qwen3" in report["errors"]
-
-
 @pytest.mark.parametrize(
     ("configured", "platform_name", "available", "effective", "fallback", "error"),
     [
@@ -240,25 +209,18 @@ def test_doctor_provider_resolution_matches_qwen_supported_paths(
         assert report["errors"] == []
 
 
-def test_doctor_inactive_qwen_fields_do_not_affect_funasr():
-    result = resolve_doctor_config(
-        {"qwen3": {"asr_model_dir": None, "word_align_model_path": ""}},
-        {},
-        {},
+def test_doctor_invalid_qwen_fields_are_fatal_even_for_funasr(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {
+            "transcription": {"default_engine": "funasr"},
+            "qwen3": {"backend_mlpackage_units": "not-a-valid-unit"},
+        },
     )
-    assert result["engine"] == "funasr"
-    assert result["errors"] == []
-    report = build_doctor_report(
-        engine="funasr",
-        runtime="cpu",
-        configured_provider="not_applicable",
-        available_providers=["CPUExecutionProvider"],
-        qwen_artifacts={},
-        funasr_dynamic_cache="deferred",
-        word_align_artifact={"exists": False, "type": "invalid", "size": 0},
-    )
-    assert report["errors"] == []
-    assert report["warnings"] == ["funasr_dynamic_cache_deferred"]
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert report["status"] == "error"
+    assert "configuration_invalid" in report["errors"]
 
 
 @pytest.mark.parametrize("word_align_artifact", [
@@ -287,28 +249,26 @@ def test_doctor_qwen_word_align_is_optional(word_align_artifact):
     assert report["warnings"] == ["optional_word-align_unavailable"]
 
 
-def test_doctor_dotenv_bare_keys_do_not_override_defaults():
-    result = resolve_doctor_config(
-        {},
-        {
-            "FUNASR_DEFAULT_ENGINE": None,
-            "FUNASR_QWEN3_ASR_ENCODER_PROVIDER": None,
-        },
+def test_doctor_config_priority_matches_real_config(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"transcription": {"default_engine": "funasr"}},
+        "FUNASR_PROFILE=cuda_dev\nFUNASR_DEFAULT_ENGINE=funasr\n",
         {"FUNASR_DEFAULT_ENGINE": "qwen3"},
     )
-    assert result["engine"] == "qwen3"
-    assert result["provider"] == "auto"
-    assert result["errors"] == []
+    report = json.loads(result.stdout)
+    assert report["engine"] == "qwen3"
+    assert report["provider"]["configured"] == "cuda"
 
 
-def test_doctor_empty_qwen_provider_uses_auto():
-    result = resolve_doctor_config(
+def test_doctor_empty_qwen_provider_uses_real_config_value(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
         {"transcription": {"default_engine": "qwen3"}},
-        {},
-        {"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": ""},
+        process_env={"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": ""},
     )
-    assert result["provider"] == "auto"
-    assert result["errors"] == []
+    report = json.loads(result.stdout)
+    assert report["provider"]["configured"] == "auto"
 
 
 @pytest.mark.parametrize(
@@ -483,3 +443,114 @@ def test_doctor_funasr_does_not_require_qwen_provider(tmp_path):
     report = json.loads(result.stdout)
     assert result.returncode == 1
     assert report["provider"]["fallback_would_occur"] is False
+
+
+def test_doctor_invalid_utf8_config_is_safe_configuration_unavailable(tmp_path):
+    _, result = _doctor_fixture(tmp_path, b"{\xff")
+    assert result.returncode == 2
+    assert len(result.stdout.splitlines()) == 1
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_unavailable" in report["errors"]
+    assert "Traceback" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_doctor_invalid_json_config_is_safe_configuration_unavailable(tmp_path):
+    _, result = _doctor_fixture(tmp_path, "{not-json")
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_unavailable" in report["errors"]
+    assert "not-json" not in result.stdout + result.stderr
+
+
+def test_doctor_missing_config_is_safe_configuration_unavailable(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    (root / "config.json").unlink()
+    result = _run_fixture_doctor(root)
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_unavailable" in report["errors"]
+
+
+def test_doctor_unreadable_config_is_safe_configuration_unavailable(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    (root / "config.json").unlink()
+    (root / "config.json").mkdir()
+    result = _run_fixture_doctor(root)
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_unavailable" in report["errors"]
+
+
+def test_doctor_real_config_rejects_transcription_type_error(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"transcription": {"max_concurrent_tasks": "bad"}},
+    )
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_invalid" in report["errors"]
+    assert "bad" not in result.stdout + result.stderr
+
+
+def test_doctor_real_config_rejects_qwen_enum_error(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"qwen3": {"backend_mlpackage_units": "not-a-valid-unit"}},
+    )
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_invalid" in report["errors"]
+    assert "not-a-valid-unit" not in result.stdout + result.stderr
+
+
+def test_doctor_real_config_rejects_qwen_type_error(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"qwen3": {"num_threads": "not-an-integer"}},
+    )
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["status"] == "error"
+    assert "configuration_invalid" in report["errors"]
+    assert "not-an-integer" not in result.stdout + result.stderr
+
+
+def test_doctor_env_repairs_lower_priority_bad_config_like_real_config(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"transcription": {"max_concurrent_tasks": "bad"}},
+        process_env={"FUNASR_MAX_CONCURRENT_TASKS": "4"},
+    )
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert report["status"] == "warning"
+    assert "configuration_invalid" not in report["errors"]
+
+
+def test_doctor_rejects_invalid_inactive_section_like_real_config(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"qwen3": {"backend_mlpackage_units": "not-a-valid-unit"}},
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert report["status"] == "error"
+    assert "configuration_invalid" in report["errors"]
+
+
+def test_doctor_probe_does_not_create_bytecode_or_directories(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    before = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+    result = _run_doctor(root)
+    after = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+    assert result.returncode in {0, 1, 2}
+    assert before == after
+    assert not list(root.rglob("*.pyc"))
+    assert not list(root.rglob("__pycache__"))

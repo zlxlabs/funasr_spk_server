@@ -12,6 +12,12 @@ from dotenv import load_dotenv
 from src.core.config_profiles import PROFILES
 
 
+class ConfigFileUnavailableError(RuntimeError):
+    """配置文件无法读取或解析时使用的安全、无路径异常。"""
+
+    code = "configuration_unavailable"
+
+
 class ServerConfig(BaseModel):
     """服务器配置"""
     host: str = "0.0.0.0"
@@ -369,16 +375,19 @@ class Config(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
 
     @classmethod
-    def load_from_file(cls, config_path: str = "config.json") -> "Config":
+    def load_from_file(cls, config_path: str = "config.json", *, strict: bool = False) -> "Config":
         """
         从文件加载配置，并支持环境变量覆盖
         优先级: 环境变量 > config.json > 默认值
+
+        strict=True 供只读配置探针使用：文件缺失、不可读或非法 JSON 直接失败，
+        不打印包含路径或原始输入的异常；正常服务路径保持历史兼容。
         """
         # 加载 .env 文件
         load_dotenv()
 
         # 从 config.json 加载基础配置
-        config_data = cls._load_json_config(config_path)
+        config_data = cls._load_json_config(config_path, strict=strict)
 
         # 应用 FUNASR_PROFILE 套餐 (覆盖 config.json, env 仍可覆盖 profile)
         config_data = cls._apply_profile_defaults(config_data)
@@ -398,9 +407,11 @@ class Config(BaseModel):
         return config
 
     @classmethod
-    def _load_json_config(cls, config_path: str) -> Dict[str, Any]:
+    def _load_json_config(cls, config_path: str, *, strict: bool = False) -> Dict[str, Any]:
         """从 JSON 文件加载配置"""
         if not os.path.exists(config_path):
+            if strict:
+                raise ConfigFileUnavailableError(ConfigFileUnavailableError.code)
             logger.warning(f"配置文件 {config_path} 不存在，使用默认配置")
             return {}
 
@@ -408,9 +419,14 @@ class Config(BaseModel):
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            if not isinstance(data, dict):
+                raise ValueError("configuration root must be an object")
+
             # 过滤掉注释字段
             return cls._filter_comments(data)
         except Exception as e:
+            if strict:
+                raise ConfigFileUnavailableError(ConfigFileUnavailableError.code) from e
             logger.error(f"加载配置文件失败: {e}")
             logger.warning("使用默认配置")
             return {}
@@ -829,6 +845,9 @@ class Config(BaseModel):
                 sys.exit(1)
 
 
-# 全局配置实例
-config = Config.load_from_file()
-config.setup_directories()
+# 全局配置实例。只读 doctor probe 通过环境开关跳过实例化和目录创建。
+if os.getenv("FUNASR_DOCTOR_CONFIG_PROBE") == "1":
+    config = None
+else:
+    config = Config.load_from_file()
+    config.setup_directories()
