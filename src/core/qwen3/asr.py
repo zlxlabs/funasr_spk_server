@@ -54,6 +54,14 @@ class ASRResult:
 
 _DEFAULT_BACKEND_ONNX_FN = "qwen3_asr_encoder_backend.onnx"
 _DEFAULT_BACKEND_MLPACKAGE_FN = "qwen3_asr_encoder_backend.mlpackage"
+_QWEN_CONTEXT_PREFIX = "You are a helpful assistant.\nKnown terms:\n"
+
+
+def build_qwen_context(terms: List[str]) -> Optional[str]:
+    """Build the fixed Qwen context; empty terms must remain ``None``."""
+    if not terms:
+        return None
+    return _QWEN_CONTEXT_PREFIX + "\n".join(terms)
 
 
 def build_engine_config(
@@ -171,6 +179,7 @@ def _run_asr_loaded_audio(
     language: str = "Chinese",
     temperature: float = 0.4,
     label: str = "audio",
+    context: Optional[str] = None,
 ) -> ASRResult:
     """Run ASR on an already-loaded 16kHz mono numpy array."""
     proc = psutil.Process()
@@ -182,7 +191,7 @@ def _run_asr_loaded_audio(
     cfg = getattr(engine, "config", None)
     result = engine.asr(
         audio=audio,
-        context=None,
+        context=context,
         language=language,
         chunk_size_sec=getattr(cfg, "chunk_size", 40.0),
         memory_chunks=getattr(cfg, "memory_num", 1),
@@ -231,6 +240,7 @@ def run_asr(
     engine,
     language: str = "Chinese",
     temperature: float = 0.4,
+    context: Optional[str] = None,
 ) -> ASRResult:
     """端到端跑一次 ASR, 返回带 RTF/内存数据的结果.
 
@@ -239,6 +249,7 @@ def run_asr(
         engine: 已构造的 QwenASREngine 实例(单例由调用方维护).
         language: 识别语言, 默认 "Chinese".
         temperature: decoder 采样温度.
+        context: 已构造的 Qwen context, 空 terms 时为 None.
 
     Returns:
         ASRResult 含 text / segment-level items / RTF / 内存数据.
@@ -255,6 +266,7 @@ def run_asr(
         language=language,
         temperature=temperature,
         label=audio_file,
+        context=context,
     )
 
 
@@ -265,6 +277,7 @@ def run_asr_window(
     duration: float,
     language: str = "Chinese",
     temperature: float = 0.4,
+    context: Optional[str] = None,
 ) -> ASRResult:
     """Run ASR on a bounded audio window while reusing the same engine.
 
@@ -282,4 +295,5 @@ def run_asr_window(
         language=language,
         temperature=temperature,
         label=f"{audio_file}@{start_second:.1f}+{duration:.1f}",
+        context=context,
     )

@@ -68,7 +68,7 @@ async def test_http_capabilities_route_precedes_metrics_flag_and_upgrade(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("engine", "terms"), (("funasr", True), ("qwen3", False)))
+@pytest.mark.parametrize(("engine", "terms"), (("funasr", True), ("qwen3", True)))
 async def test_http_capabilities_engine_matrix(monkeypatch, engine, terms):
     monkeypatch.setattr(http_endpoints, "detect_runtime", lambda: SimpleNamespace(name="mac_ane"))
     ep = _endpoints(_config(engine=engine))
@@ -90,8 +90,9 @@ class _ClosedWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_websocket_connected_uses_same_capability_id(monkeypatch):
-    cfg = _config()
+@pytest.mark.parametrize("engine", ["funasr", "qwen3"])
+async def test_websocket_connected_uses_same_capability_id(monkeypatch, engine):
+    cfg = _config(engine=engine)
     monkeypatch.setattr(websocket_handler, "config", cfg)
     monkeypatch.setattr(websocket_handler, "detect_runtime", lambda: SimpleNamespace(name="cpu"))
     ep = _endpoints(cfg)

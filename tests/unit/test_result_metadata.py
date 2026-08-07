@@ -260,13 +260,37 @@ class TestFreshExitMetadata:
         assert task.result is None
 
 
-def test_terms_metadata_is_funasr_only():
+def test_terms_metadata_is_supported_engine_only():
     funasr = build_result_metadata(engine="funasr", options=TranscribeOptions(terms=["Alpha"]))
     qwen = build_result_metadata(engine="qwen3", options=TranscribeOptions(terms=["Alpha"]))
     assert funasr["context_applied"] is True
     assert funasr["terms_count"] == 1
-    assert "context_applied" not in qwen
-    assert "terms_count" not in qwen
+    assert qwen["context_applied"] is True
+    assert qwen["terms_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_qwen_terms_failure_has_no_metadata(wa_off, tmp_path):
+    from src.core.task_manager import TaskManager
+
+    mgr = TaskManager()
+    path = tmp_path / "qwen.wav"
+    path.write_bytes(b"\0")
+    task = TranscriptionTask(
+        task_id="qwen-terms-fail", file_name=path.name, file_path=str(path),
+        file_size=1, file_hash="qwen-fail", engine="qwen3",
+        options=TranscribeOptions(terms=["Alpha"]), retry_count=99,
+    )
+    mgr.tasks[task.task_id] = task
+    fake = MagicMock(transcribe=AsyncMock(side_effect=RuntimeError("model failed")))
+    with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake), \
+         patch.object(mgr, "_notify_task_failed", new=AsyncMock()), \
+         patch.object(mgr, "_maybe_delete_task_file", new=AsyncMock()), \
+         patch.object(mgr, "_send_wework_notification", new=AsyncMock()):
+        await mgr._process_task(task.task_id)
+
+    assert task.status is TaskStatus.FAILED
+    assert task.result is None
 
 
 # ==================== 缓存命中出口组装 ====================

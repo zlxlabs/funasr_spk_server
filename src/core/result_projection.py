@@ -71,7 +71,7 @@ def build_result_metadata(
     }
     if word_align_error:
         md["word_align_error"] = word_align_error
-    if engine == "funasr" and options.terms:
+    if engine in ("funasr", "qwen3") and options.terms:
         md["context_applied"] = True
         md["terms_count"] = len(options.terms)
     # cap 键存在 == 本响应 segments 实际过了 merge 视图
