@@ -824,19 +824,19 @@ class Config(BaseModel):
 
         logger.info("=" * 60)
 
+    def config_directory_targets(self) -> tuple[tuple[str, Path], ...]:
+        """返回服务启动时 setup_directories 使用的五个目录目标。"""
+        return (
+            ("server.temp_dir", Path(self.server.temp_dir)),
+            ("server.upload_dir", Path(self.server.upload_dir)),
+            ("funasr.model_dir", Path(self.funasr.model_dir)),
+            ("database.parent", Path(self.database.path).parent),
+            ("logging.log_dir", Path(self.logging.log_dir)),
+        )
+
     def setup_directories(self):
         """创建必要的目录"""
-        is_worker = os.getenv('FUNASR_WORKER_MODE') == '1'
-
-        directories = [
-            self.server.temp_dir,
-            self.server.upload_dir,
-            self.funasr.model_dir,
-            Path(self.database.path).parent,
-            self.logging.log_dir
-        ]
-
-        for directory in directories:
+        for _, directory in self.config_directory_targets():
             try:
                 Path(directory).mkdir(parents=True, exist_ok=True)
                 # 目录创建成功时不输出日志,避免影响日志系统初始化
@@ -845,8 +845,10 @@ class Config(BaseModel):
                 sys.exit(1)
 
 
-# 全局配置实例。只读 doctor probe 通过环境开关跳过实例化和目录创建。
-if os.getenv("FUNASR_DOCTOR_CONFIG_PROBE") == "1":
+# 全局配置实例。仅 `python -m src.core.doctor_config_probe` 上下文跳过目录创建。
+_main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+_is_doctor_config_probe = getattr(_main_spec, "name", None) == "src.core.doctor_config_probe"
+if _is_doctor_config_probe:
     config = None
 else:
     config = Config.load_from_file()

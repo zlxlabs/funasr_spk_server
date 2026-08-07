@@ -14,6 +14,7 @@ import pytest
 from src.core.doctor_diagnostics import (
     build_doctor_report,
     describe_doctor_artifact,
+    inspect_doctor_directory_target,
 )
 
 
@@ -73,6 +74,29 @@ def _run_fixture_doctor(root: Path, process_env=None):
     env.update(process_env or {})
     return subprocess.run(
         [sys.executable, str(root / "scripts" / "doctor.py"), "--json"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def _run_fixture_probe(root: Path, process_env=None):
+    """直接执行 -m probe，验证 IPC stdout 只含安全元数据。"""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("FUNASR_")}
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.update(
+        {
+            "FUNASR_NOTIFICATION_ENABLED": "false",
+            "FUNASR_RUNTIME": "cpu",
+            "FUNASR_QWEN3_ASR_ENCODER_PROVIDER": "cpu",
+        }
+    )
+    env.update(process_env or {})
+    return subprocess.run(
+        [sys.executable, "-m", "src.core.doctor_config_probe", str(root / "config.json")],
         cwd=root,
         env=env,
         text=True,
@@ -569,3 +593,132 @@ def test_doctor_main_does_not_mutate_calling_process_environment(monkeypatch, ca
     assert doctor.main(["--json"]) == 0
     assert dict(os.environ) == before
     capsys.readouterr()
+
+
+@pytest.mark.parametrize("probe_source", ["process", "dotenv"])
+def test_probe_env_name_cannot_disable_normal_service_config(tmp_path, probe_source):
+    probe_line = "" if probe_source == "process" else "FUNASR_DOCTOR_CONFIG_PROBE=1\n"
+    (tmp_path / ".env").write_text(
+        probe_line
+        + "FUNASR_NOTIFICATION_ENABLED=false\n"
+        + "FUNASR_DEFAULT_ENGINE=funasr\n"
+        f"FUNASR_TEMP_DIR={tmp_path / 'temp'}\n"
+        f"FUNASR_UPLOAD_DIR={tmp_path / 'uploads'}\n"
+        f"FUNASR_MODEL_DIR={tmp_path / 'models'}\n"
+        f"FUNASR_DATA_DIR={tmp_path / 'data'}\n"
+        f"FUNASR_LOG_DIR={tmp_path / 'logs'}\n",
+        encoding="utf-8",
+    )
+    env = {key: value for key, value in os.environ.items() if not key.startswith("FUNASR_")}
+    env["PYTHONPATH"] = str(ROOT)
+    if probe_source == "process":
+        env["FUNASR_DOCTOR_CONFIG_PROBE"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c", "import src.main"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "NoneType" not in result.stderr
+
+
+def test_doctor_directory_file_target_is_fatal_without_writing(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    target = root / "upload-file"
+    target.write_text("not a directory", encoding="utf-8")
+    result = _run_fixture_doctor(root, {"FUNASR_UPLOAD_DIR": str(target)})
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert "directory_unavailable" in report["errors"]
+    assert "upload-file" not in result.stdout
+
+
+def test_doctor_directory_file_ancestor_is_fatal_without_writing(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    blocked = root / "blocked"
+    blocked.write_text("not a directory", encoding="utf-8")
+    result = _run_fixture_doctor(root, {"FUNASR_UPLOAD_DIR": str(blocked / "uploads")})
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert "directory_unavailable" in report["errors"]
+
+
+def test_doctor_directory_existing_and_creatable_targets_are_usable(tmp_path):
+    root, _ = _doctor_fixture(tmp_path, {})
+    existing = root / "existing"
+    existing.mkdir()
+    result = _run_fixture_doctor(
+        root,
+        {
+            "FUNASR_TEMP_DIR": str(existing / "temp"),
+            "FUNASR_UPLOAD_DIR": str(existing / "uploads"),
+            "FUNASR_MODEL_DIR": str(existing / "models"),
+            "FUNASR_DATA_DIR": str(existing / "data"),
+            "FUNASR_LOG_DIR": str(existing / "logs"),
+        },
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert "directory_unavailable" not in report["errors"]
+
+
+def test_doctor_directory_target_requires_writable_searchable_ancestor(tmp_path, monkeypatch):
+    target = tmp_path / "missing" / "target"
+    monkeypatch.setattr("src.core.doctor_diagnostics.os.access", lambda *_: False)
+    result = inspect_doctor_directory_target(target)
+    assert result["usable"] is False
+    assert result["error"] == "ancestor_not_writable"
+
+
+def test_probe_stdout_contains_artifact_metadata_but_no_raw_paths(tmp_path):
+    secret = "doctor-secret-ipc-path"
+    root, _ = _doctor_fixture(
+        tmp_path,
+        {
+            "transcription": {"default_engine": "qwen3"},
+            "qwen3": {
+                "asr_model_dir": str(tmp_path / secret),
+                "segmentation_model": str(tmp_path / (secret + ".seg")),
+                "embedding_model": str(tmp_path / (secret + ".embed")),
+                "word_align_model_path": str(tmp_path / (secret + ".words")),
+            },
+        },
+    )
+    result = _run_fixture_probe(root)
+    assert result.returncode == 0
+    assert len(result.stdout.splitlines()) == 1
+    assert secret not in result.stdout
+    payload = json.loads(result.stdout)
+    assert set(payload["artifacts"]) == {"qwen", "word_align"}
+    assert len(payload["directories"]) == 5
+
+
+def test_probe_coreml_backend_and_word_align_are_safe_metadata(tmp_path):
+    root = tmp_path / "fixture-repo"
+    model_dir = root / "qwen-model"
+    model_dir.mkdir(parents=True)
+    (model_dir / "qwen3_asr_encoder_backend.mlpackage").mkdir()
+    word_align = root / "word-align.onnx"
+    word_align.write_bytes(b"align")
+    root, _ = _doctor_fixture(
+        tmp_path,
+        {
+            "transcription": {"default_engine": "qwen3"},
+            "qwen3": {
+                "asr_model_dir": str(model_dir),
+                "segmentation_model": str(root / "segmentation.onnx"),
+                "embedding_model": str(root / "embedding.onnx"),
+                "word_align_model_path": str(word_align),
+            },
+        },
+    )
+    result = _run_fixture_probe(root, {"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": "coreml_ane_full"})
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["artifacts"]["qwen"]["backend_mlpackage"]["type"] == "directory"
+    assert payload["artifacts"]["word_align"] == {"exists": True, "type": "file", "size": 5}
+    assert str(model_dir) not in result.stdout

@@ -43,14 +43,15 @@
 
 ### I4：只读 doctor 运维诊断
 
-- **状态**：进行中（PR #6 draft，分支 `feat/read-only-doctor-i4`）
+- **状态**：进行中（PR #7 draft，分支 `feat/read-only-doctor-i4-v2`）
 - **预期产出**：`scripts/doctor.py --json` 任意 cwd 输出单一 JSON，报告 provider/artifact/fallback 与退出码，严格无副作用。
 - **当前范围**：只读配置与工件诊断；不加载模型、不联网、不下载、不创建目录、不改变 capabilities schema。
 - **关键决策**：退出码固定 0/1/2；FunASR 动态缓存为 unknown/deferred；可选 word-align 缺失仅 WARN。
 - **已知阻塞**：无代码阻塞；I2 合并与路线审计已完成。CI workflow/status checks 缺失，不能伪称 CI 通过。
 - **推进前必须拿到的证据**：
-  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（17 passed）。
-  - [x] 多 cwd、provider/artifact 与副作用行为证据；环境：本地临时目录；真实入口：仓库根与独立临时 cwd 的绝对脚本 subprocess 均 stdout 单 JSON、stderr 分离、exit=1；strace 未见网络/端口/创建目录/写文件/模型路径访问，环境与 git 状态快照无变化。
+  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（本轮 65 passed）。
+  - [x] 配置 probe 真实 Config、env/.env 污染、目录目标只读矩阵与安全 IPC 元数据；环境：本地 venv/临时 fixture；真实入口：普通 `src.main` 污染回归、`python -m src.core.doctor_config_probe` stdout 无 raw path、目录文件/祖先不可用均 exit=2。
+  - [x] 多 cwd、provider/artifact 与副作用行为证据；环境：本地临时目录；真实入口：仓库根与独立临时 cwd 的绝对脚本 subprocess 均 stdout 单 JSON、stderr 分离、exit=1；strace 未见网络/端口/创建目录/写文件（仅做配置/工件 metadata stat，无模型加载/下载），环境与 git 状态快照无变化。
 
 ## I3 跨仓边界
 

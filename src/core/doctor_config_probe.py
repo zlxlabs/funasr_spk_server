@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from typing import Sequence
 
 
 sys.dont_write_bytecode = True
-os.environ["FUNASR_DOCTOR_CONFIG_PROBE"] = "1"
-os.environ["FUNASR_WORKER_MODE"] = "1"
 
 
 def run_config_probe(config_path: str) -> int:
@@ -41,7 +38,20 @@ def run_config_probe(config_path: str) -> int:
         print(json.dumps({"status": "error", "error": "configuration_invalid"}))
         return 2
 
-    print(json.dumps({"status": "ok", **snapshot}, ensure_ascii=False, sort_keys=True))
+    directory_metadata = snapshot["directories"]
+    assert isinstance(directory_metadata, dict)
+    has_directory_error = any(not metadata["usable"] for metadata in directory_metadata.values())
+    status = "error" if has_directory_error else "ok"
+    error = "directory_unavailable" if has_directory_error else None
+    print(
+        json.dumps(
+            {"status": status, "error": error, **snapshot},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    if has_directory_error:
+        return 2
     return 0
 
 

@@ -22,21 +22,6 @@ _PROVIDER_NAMES = {
 }
 
 
-def doctor_config_snapshot(config: "Config") -> dict[str, object]:
-    """提取真实 Config 已解析字段，供只读 doctor 父进程做路径探测。"""
-    return {
-        "engine": config.transcription.default_engine,
-        "provider": config.qwen3.asr_encoder_provider or "auto",
-        "runtime_override": os.getenv("FUNASR_RUNTIME", "").strip().lower(),
-        "qwen_paths": {
-            "asr_model_dir": config.qwen3.asr_model_dir,
-            "segmentation_model": config.qwen3.segmentation_model,
-            "embedding_model": config.qwen3.embedding_model,
-            "word_align_model_path": config.qwen3.word_align_model_path,
-        },
-    }
-
-
 def describe_doctor_artifact(path: object) -> dict[str, object]:
     """Describe one local artifact without exposing its path or reading content."""
     if not isinstance(path, (str, Path)) or (isinstance(path, str) and not path.strip()):
@@ -62,6 +47,82 @@ def describe_doctor_artifact(path: object) -> dict[str, object]:
         kind = "other"
         size = 0
     return {"exists": True, "type": kind, "size": size}
+
+
+def inspect_doctor_directory_target(path: object) -> dict[str, object]:
+    """只读判断目录目标是否可由 setup_directories 成功处理。"""
+    if not isinstance(path, (str, Path)) or (isinstance(path, str) and not path.strip()):
+        return {"exists": False, "type": "invalid", "size": 0, "usable": False, "error": "target_invalid"}
+
+    candidate = Path(path)
+    try:
+        if os.path.lexists(candidate) and not candidate.exists():
+            return {"exists": True, "type": "other", "size": 0, "usable": False, "error": "target_not_directory"}
+        if candidate.exists():
+            artifact = describe_doctor_artifact(candidate)
+            usable = artifact["exists"] and artifact["type"] == "directory"
+            return {
+                **artifact,
+                "usable": usable,
+                "error": None if usable else "target_not_directory",
+            }
+    except OSError:
+        return {"exists": False, "type": "unreadable", "size": 0, "usable": False, "error": "target_unreadable"}
+
+    ancestor = candidate.parent
+    while True:
+        try:
+            if ancestor.exists():
+                break
+        except OSError:
+            return {"exists": False, "type": "unreadable", "size": 0, "usable": False, "error": "ancestor_unreadable"}
+        parent = ancestor.parent
+        if parent == ancestor:
+            return {"exists": False, "type": "missing", "size": 0, "usable": False, "error": "ancestor_unavailable"}
+        ancestor = parent
+
+    try:
+        if not ancestor.is_dir():
+            error = "ancestor_not_directory"
+        elif not os.access(ancestor, os.W_OK):
+            error = "ancestor_not_writable"
+        elif not os.access(ancestor, os.X_OK):
+            error = "ancestor_not_searchable"
+        else:
+            error = None
+    except OSError:
+        error = "ancestor_unreadable"
+    return {"exists": False, "type": "missing", "size": 0, "usable": error is None, "error": error}
+
+
+def doctor_config_snapshot(config: "Config") -> dict[str, object]:
+    """提取真实 Config 的安全 provider、工件和目录元数据，不回传原始路径。"""
+    artifact_paths = {
+        "asr_model_dir": config.qwen3.asr_model_dir,
+        "segmentation_model": config.qwen3.segmentation_model,
+        "embedding_model": config.qwen3.embedding_model,
+    }
+    qwen_artifacts = {
+        name: describe_doctor_artifact(value) for name, value in artifact_paths.items()
+    }
+    if config.qwen3.asr_encoder_provider == "coreml_ane_full":
+        qwen_artifacts["backend_mlpackage"] = describe_doctor_artifact(
+            Path(config.qwen3.asr_model_dir) / "qwen3_asr_encoder_backend.mlpackage"
+        )
+    directories = {
+        name: inspect_doctor_directory_target(path)
+        for name, path in config.config_directory_targets()
+    }
+    return {
+        "engine": config.transcription.default_engine,
+        "provider": config.qwen3.asr_encoder_provider or "auto",
+        "runtime_override": os.getenv("FUNASR_RUNTIME", "").strip().lower(),
+        "artifacts": {
+            "qwen": qwen_artifacts,
+            "word_align": describe_doctor_artifact(config.qwen3.word_align_model_path),
+        },
+        "directories": directories,
+    }
 
 
 def _provider_name(

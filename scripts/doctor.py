@@ -15,7 +15,6 @@ sys.path.insert(0, str(ROOT))
 
 from src.core.doctor_diagnostics import (  # noqa: E402
     build_doctor_report,
-    describe_doctor_artifact,
 )
 
 
@@ -23,7 +22,6 @@ def _probe_config() -> tuple[dict[str, object], list[str]]:
     """在隔离子进程复用真实 Config，父进程只接受白名单字段。"""
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["FUNASR_DOCTOR_CONFIG_PROBE"] = "1"
     try:
         result = subprocess.run(
             [sys.executable, "-m", "src.core.doctor_config_probe", str(ROOT / "config.json")],
@@ -35,9 +33,13 @@ def _probe_config() -> tuple[dict[str, object], list[str]]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {"engine": "unknown", "provider": "unknown", "qwen_paths": {}, "runtime_override": ""}, [
-            "configuration_unavailable"
-        ]
+        return {
+            "engine": "unknown",
+            "provider": "unknown",
+            "artifacts": {},
+            "directories": {},
+            "runtime_override": "",
+        }, ["configuration_unavailable"]
 
     try:
         lines = result.stdout.splitlines()
@@ -46,24 +48,38 @@ def _probe_config() -> tuple[dict[str, object], list[str]]:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    if result.returncode == 0 and payload.get("status") == "ok":
-        paths = payload.get("qwen_paths")
-        if (
-            isinstance(payload.get("engine"), str)
-            and isinstance(payload.get("provider"), str)
-            and isinstance(paths, dict)
-        ):
-            return {
-                "engine": payload["engine"],
-                "provider": payload["provider"],
-                "qwen_paths": paths,
-                "runtime_override": payload.get("runtime_override", ""),
-            }, []
+    artifacts = payload.get("artifacts")
+    directories = payload.get("directories")
+    if (
+        result.returncode in {0, 2}
+        and payload.get("status") in {"ok", "error"}
+        and isinstance(payload.get("engine"), str)
+        and isinstance(payload.get("provider"), str)
+        and isinstance(artifacts, dict)
+        and isinstance(directories, dict)
+    ):
+        effective = {
+            "engine": payload["engine"],
+            "provider": payload["provider"],
+            "artifacts": artifacts,
+            "directories": directories,
+            "runtime_override": payload.get("runtime_override", ""),
+        }
+        if payload.get("status") == "ok":
+            return effective, []
+        if payload.get("error") == "directory_unavailable":
+            return effective, ["directory_unavailable"]
     error = payload.get("error")
     safe_error = (
         error if error in {"configuration_unavailable", "configuration_invalid"} else "configuration_unavailable"
     )
-    return {"engine": "unknown", "provider": "unknown", "qwen_paths": {}, "runtime_override": ""}, [safe_error]
+    return {
+        "engine": "unknown",
+        "provider": "unknown",
+        "artifacts": {},
+        "directories": {},
+        "runtime_override": "",
+    }, [safe_error]
 
 
 def _runtime(available: list[str], forced: str) -> str:
@@ -87,34 +103,19 @@ def _available_providers() -> list[str]:
         return []
 
 
-def _path(value: object) -> Path | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    candidate = Path(value)
-    return candidate if candidate.is_absolute() else ROOT / candidate
-
-
 def _diagnose() -> tuple[dict[str, object], int]:
     effective, errors = _probe_config()
     warnings: list[str] = []
     available = _available_providers()
-    paths = effective["qwen_paths"]
-    assert isinstance(paths, dict)
-    qwen_artifacts = (
-        {
-            name: describe_doctor_artifact(_path(value))
-            for name, value in paths.items()
-            if name != "word_align_model_path"
-        }
+    artifacts = effective["artifacts"]
+    assert isinstance(artifacts, dict)
+    qwen_artifacts = artifacts.get("qwen", {}) if effective["engine"] == "qwen3" else {}
+    word_align_artifact = (
+        artifacts.get("word_align", {"exists": False, "type": "missing", "size": 0})
         if effective["engine"] == "qwen3"
-        else {}
+        else {"exists": False, "type": "inactive", "size": 0}
     )
     provider = str(effective["provider"])
-    if effective["engine"] == "qwen3" and provider == "coreml_ane_full":
-        model_dir = _path(paths.get("asr_model_dir"))
-        qwen_artifacts["backend_mlpackage"] = describe_doctor_artifact(
-            model_dir / "qwen3_asr_encoder_backend.mlpackage" if model_dir is not None else None
-        )
     report = build_doctor_report(
         engine=str(effective["engine"]),
         runtime=_runtime(available, str(effective.get("runtime_override", ""))),
@@ -122,11 +123,7 @@ def _diagnose() -> tuple[dict[str, object], int]:
         available_providers=available,
         qwen_artifacts=qwen_artifacts,
         funasr_dynamic_cache="deferred",
-        word_align_artifact=(
-            describe_doctor_artifact(_path(paths.get("word_align_model_path")))
-            if effective["engine"] == "qwen3"
-            else {"exists": False, "type": "inactive", "size": 0}
-        ),
+        word_align_artifact=word_align_artifact,
         platform_name=platform.system().lower(),
         config_errors=errors,
         config_warnings=warnings,
