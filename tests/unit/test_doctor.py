@@ -154,6 +154,40 @@ def test_doctor_effective_config_uses_dotenv_profile_then_process_env():
     assert result["errors"] == []
 
 
+@pytest.mark.parametrize("section", ["transcription", "qwen3"])
+@pytest.mark.parametrize("invalid_value", [None, [], "invalid"])
+def test_doctor_invalid_section_is_fatal_without_profile(tmp_path, section, invalid_value):
+    _, result = _doctor_fixture(tmp_path, {section: invalid_value})
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert report["status"] == "error"
+    assert f"configuration_section_invalid:{section}" in report["errors"]
+
+
+@pytest.mark.parametrize("section", ["transcription", "qwen3"])
+@pytest.mark.parametrize("profile", ["cuda_dev", "mac_dev"])
+@pytest.mark.parametrize("invalid_value", [None, [], "invalid"])
+def test_doctor_profile_mapping_replaces_invalid_section(tmp_path, section, profile, invalid_value):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {section: invalid_value},
+        f"FUNASR_PROFILE={profile}\n",
+    )
+    report = json.loads(result.stdout)
+    assert f"configuration_section_invalid:{section}" not in report["errors"]
+
+
+def test_doctor_field_env_does_not_repair_invalid_section(tmp_path):
+    _, result = _doctor_fixture(
+        tmp_path,
+        {"qwen3": None},
+        process_env={"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": "cpu"},
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert "configuration_section_invalid:qwen3" in report["errors"]
+
+
 @pytest.mark.parametrize(
     ("configured", "platform_name", "available", "effective", "fallback", "error"),
     [
@@ -162,6 +196,8 @@ def test_doctor_effective_config_uses_dotenv_profile_then_process_env():
         ("cpu", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", False, None),
         ("cuda", "linux", ["CUDAExecutionProvider"], "CUDAExecutionProvider", False, None),
         ("cuda", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", True, "configured_provider_unavailable"),
+        ("cuda", "linux", [], "unavailable", True, "configured_provider_unavailable"),
+        ("cuda", "linux", ["TensorrtExecutionProvider"], "unavailable", True, "configured_provider_unavailable"),
         ("tensorrt", "linux", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider", False, None),
         ("trt", "linux", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider", False, None),
         ("coreml_ane_fe", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", False, None),

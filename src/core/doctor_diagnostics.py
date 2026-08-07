@@ -83,6 +83,10 @@ def resolve_doctor_config(
             warnings.append("unknown_profile")
         else:
             _merge_mapping(resolved, profile)
+            if isinstance(profile.get("transcription"), Mapping):
+                transcription_invalid = False
+            if isinstance(profile.get("qwen3"), Mapping):
+                qwen_invalid = False
     for env_name, (section_name, field_name) in _ENV_FIELDS.items():
         if env_name in environment and environment[env_name] is not None:
             resolved[section_name][field_name] = environment[env_name]  # type: ignore[index]
@@ -102,11 +106,11 @@ def resolve_doctor_config(
             engine = "unknown"
     if transcription_invalid:
         errors.append("configuration_section_invalid:transcription")
+    if qwen_invalid:
+        errors.append("configuration_section_invalid:qwen3")
 
     provider_value = qwen3.get("asr_encoder_provider")
     if engine == "qwen3":
-        if qwen_invalid:
-            errors.append("configuration_section_invalid:qwen3")
         if provider_value is None or not isinstance(provider_value, str):
             errors.append("invalid_provider_type")
             provider = "unknown"
@@ -192,7 +196,7 @@ def _provider_name(
         "coreml_ane_full": "CoreMLExecutionProvider",
     }.get(value, platform_default)
     target_available = target in available
-    effective = target if target_available else "CPUExecutionProvider"
+    effective = target if target_available else "CPUExecutionProvider" if "CPUExecutionProvider" in available else "unavailable"
     unsupported = value not in _PROVIDER_NAMES
     return target, effective, unsupported or not target_available, unsupported
 
