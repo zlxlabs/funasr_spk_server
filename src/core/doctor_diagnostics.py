@@ -57,6 +57,7 @@ def build_doctor_report(
     """Build safe diagnostics from explicit values; never reads global config."""
     available = list(dict.fromkeys(str(item) for item in available_providers))
     effective = _provider_name(configured_provider, runtime)
+    safe_configured = configured_provider.strip().lower() if effective else "unknown"
     provider_fallback = effective is None or effective not in available
     errors: list[str] = []
     warnings: list[str] = []
@@ -80,7 +81,7 @@ def build_doctor_report(
         "engine": engine,
         "runtime": runtime,
         "provider": {
-            "configured": configured_provider,
+            "configured": safe_configured,
             "effective": effective or "unavailable",
             "available": available,
             "fallback_would_occur": provider_fallback,

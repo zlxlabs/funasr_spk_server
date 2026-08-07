@@ -177,11 +177,12 @@ def test_doctor_cli_does_not_echo_secret_or_artifact_paths(tmp_path):
     result = _run_doctor(
         tmp_path,
         FUNASR_DEFAULT_ENGINE="qwen3",
+        FUNASR_QWEN3_ASR_ENCODER_PROVIDER=secret,
         FUNASR_QWEN3_ASR_MODEL_DIR=str(secret_path),
         FUNASR_QWEN3_SEGMENTATION_MODEL=str(secret_path),
         FUNASR_QWEN3_EMBEDDING_MODEL=str(secret_path),
     )
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert secret not in result.stdout
     assert secret not in result.stderr
 
