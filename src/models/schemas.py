@@ -3,7 +3,11 @@
 """
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+import re
+import unicodedata
+
+from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic_core import PydanticCustomError
 from enum import Enum
 
 
@@ -84,8 +88,16 @@ class TranscribeOptions(BaseModel):
     # 优先级链（请求 > config 兜底）在构造 options 前由 resolve_word_align 算一次，下游
     # transcribe/cache/metadata 全读此字段，不再各自读 config。JSON-only（SRT 不挂词，见 cache 2A）。
     word_align: bool = Field(default=False, description="是否输出词级时间戳（segment.words）；已解析的 effective 值")
+    terms: List[str] = Field(default_factory=list, description="已验证的 ASR 专名术语")
 
     model_config = {"protected_namespaces": ()}
+
+    @model_serializer(mode="wrap")
+    def dump_transcription_options(self, handler):
+        data = handler(self)
+        if not self.terms:
+            data.pop("terms", None)
+        return data
 
 
 def resolve_word_align(request_value: Optional[bool], config_default: bool) -> bool:
@@ -170,8 +182,62 @@ class FileUploadRequest(BaseModel):
     # True/False=显式. 默认 None → 老客户端不传此字段行为零变化（resolve_word_align 走 config，
     # 默认关）. 老 server Pydantic 忽略未知字段（部署顺序: server 先升级、客户端后启用）.
     word_align: Optional[bool] = Field(default=None, description="是否输出词级时间戳；None=跟随 server 默认（默认关）")
+    terms: List[str] = Field(default_factory=list, description="结构化 ASR 专名术语；服务端负责规范化")
+
+    @field_validator("terms", mode="before")
+    @classmethod
+    def validate_transcription_terms(cls, raw_terms):
+        """唯一入口：规范化术语并把限额失败编码为 invalid_terms。"""
+        if raw_terms is None:
+            raw_terms = []
+        if not isinstance(raw_terms, (list, tuple)) or not all(
+            isinstance(term, str) for term in raw_terms
+        ):
+            return raw_terms
+        try:
+            return normalize_transcription_terms(list(raw_terms))
+        except TranscriptionTermsError as error:
+            raise PydanticCustomError(
+                "invalid_terms",
+                "Invalid transcription terms: {reason}",
+                {"reason": error.reason},
+            ) from error
 
     model_config = {"protected_namespaces": ()}
+
+
+class TranscriptionTermsError(ValueError):
+    """术语规范化失败，reason 是稳定的协议错误枚举。"""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def normalize_transcription_terms(raw: Optional[List[str]]) -> List[str]:
+    """规范化 ASR 术语：先检查 raw 限额，再 NFKC、trim、折叠空白、稳定去重。"""
+    if raw is None:
+        return []
+    if len(raw) > 100:
+        raise TranscriptionTermsError("too_many_raw_items")
+    if any(len(term) > 256 for term in raw):
+        raise TranscriptionTermsError("raw_item_too_long")
+
+    effective: List[str] = []
+    seen = set()
+    for term in raw:
+        normalized = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", term).strip())
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        effective.append(normalized)
+    if len(effective) > 50:
+        raise TranscriptionTermsError("too_many_terms")
+    if any(len(term) > 64 for term in effective):
+        raise TranscriptionTermsError("term_too_long")
+    if sum(len(term) for term in effective) > 1024:
+        raise TranscriptionTermsError("total_too_long")
+    return effective
 
 
 class FileUploadResponse(BaseModel):

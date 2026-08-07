@@ -206,6 +206,8 @@ class TaskManager:
             options=TranscribeOptions(
                 language=request.language,
                 diarize=request.diarize,
+                # terms 已由 request validator 规范化；这里只复制，不重复 normalize。
+                terms=list(request.terms),
                 # 决策 1A: effective word_align 在此解析一次（请求 > config 兜底），
                 # 写进 options.word_align，下游 transcribe/cache/metadata 全读它。
                 word_align=resolve_word_align(request.word_align, config.qwen3.word_align_enabled),
