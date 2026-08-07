@@ -9,49 +9,13 @@ from typing import Dict, Any, Optional, List, Tuple, Literal
 from pydantic import BaseModel, Field, validator, model_validator
 from loguru import logger
 from dotenv import load_dotenv
+from src.core.config_profiles import PROFILES
 
 
-# ==================== FUNASR_PROFILE 套餐 (A1 治理) ====================
-# 切平台 / 切环境一句 env 搞定: FUNASR_PROFILE=mac_prod / mac_dev / cuda_prod / cuda_dev
-# 优先级: defaults < config.json < profile < env (env 仍可覆盖 profile)
-# profile 覆盖 config.json 已有字段, 启动日志会列出被覆盖的字段防止"惊讶感"
-# pool_size 全 profile 默认 1 (2026-06-10 用户拍板):
-# - 3060 12GB 实测 pool=2 + word_align 双 MMS CUDA session 撞 BFCArena OOM
-#   (fallback 虽不挂但词级时间戳静默丢失), 单实例稳定可预期
-# - 并发需求再用 FUNASR_QWEN3_POOL_SIZE env 按机器显存/内存显式开
-PROFILES: Dict[str, Dict[str, Any]] = {
-    # Mac 主力引擎 = funasr: 速度快, 大内存(如 64G)并发拉得开(用 FUNASR_MAX_CONCURRENT_TASKS
-    # 按内存调, 实测可 3 进程). qwen3-1.7B 准确度更高但 Mac 上提速需更强环境, 仅按需用
-    # FUNASR_DEFAULT_ENGINE=qwen3 临时切. qwen3 配置(pool/encoder)保留以便临时切换即用.
-    # CUDA profile 才默认 qwen3(高准确度 + GPU 算力补速度).
-    "mac_prod": {
-        "server": {"port": 8767},
-        "transcription": {"default_engine": "funasr", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
-    },
-    "mac_dev": {
-        "server": {"port": 8867},
-        "transcription": {"default_engine": "funasr", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
-        "logging": {"level": "DEBUG"},
-    },
-    # word_align (词级时间戳) 改 per-request API 开关 (2026-06-16 显存落地评审), profile
-    # 不再强开. 原因: CUDA word_align session 显存高水位常驻 (batch>=2 在 3060 12GB 撞
-    # BFCArena OOM, 见 docs/开发/gpu加速/2026-06-16-Qwen3-word-align显存PoC与落地计划.md),
-    # 全局强开让每个请求都被迫吃 ~6GB 显存. 现默认关 (config 兜底显式 False everywhere,
-    # codex #13: 否则 per-request 默认不是真 OFF), 要词的请求才按 request word_align=true 开,
-    # CUDA 锁死 batch=1. 想全局默认开仍可走 env FUNASR_QWEN3_WORD_ALIGN_ENABLED=true (兜底层).
-    "cuda_prod": {
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "cuda"},
-    },
-    "cuda_dev": {
-        "server": {"port": 8867},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "cuda"},
-        "logging": {"level": "DEBUG"},
-    },
-}
+class ConfigFileUnavailableError(RuntimeError):
+    """配置文件无法读取或解析时使用的安全、无路径异常。"""
+
+    code = "configuration_unavailable"
 
 
 class ServerConfig(BaseModel):
@@ -411,16 +375,19 @@ class Config(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
 
     @classmethod
-    def load_from_file(cls, config_path: str = "config.json") -> "Config":
+    def load_from_file(cls, config_path: str = "config.json", *, strict: bool = False) -> "Config":
         """
         从文件加载配置，并支持环境变量覆盖
         优先级: 环境变量 > config.json > 默认值
+
+        strict=True 供只读配置探针使用：文件缺失、不可读或非法 JSON 直接失败，
+        不打印包含路径或原始输入的异常；正常服务路径保持历史兼容。
         """
         # 加载 .env 文件
         load_dotenv()
 
         # 从 config.json 加载基础配置
-        config_data = cls._load_json_config(config_path)
+        config_data = cls._load_json_config(config_path, strict=strict)
 
         # 应用 FUNASR_PROFILE 套餐 (覆盖 config.json, env 仍可覆盖 profile)
         config_data = cls._apply_profile_defaults(config_data)
@@ -440,9 +407,11 @@ class Config(BaseModel):
         return config
 
     @classmethod
-    def _load_json_config(cls, config_path: str) -> Dict[str, Any]:
+    def _load_json_config(cls, config_path: str, *, strict: bool = False) -> Dict[str, Any]:
         """从 JSON 文件加载配置"""
         if not os.path.exists(config_path):
+            if strict:
+                raise ConfigFileUnavailableError(ConfigFileUnavailableError.code)
             logger.warning(f"配置文件 {config_path} 不存在，使用默认配置")
             return {}
 
@@ -450,9 +419,14 @@ class Config(BaseModel):
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            if not isinstance(data, dict):
+                raise ValueError("configuration root must be an object")
+
             # 过滤掉注释字段
             return cls._filter_comments(data)
         except Exception as e:
+            if strict:
+                raise ConfigFileUnavailableError(ConfigFileUnavailableError.code) from e
             logger.error(f"加载配置文件失败: {e}")
             logger.warning("使用默认配置")
             return {}
@@ -850,19 +824,19 @@ class Config(BaseModel):
 
         logger.info("=" * 60)
 
+    def config_directory_targets(self) -> tuple[tuple[str, Path], ...]:
+        """返回服务启动时 setup_directories 使用的五个目录目标。"""
+        return (
+            ("server.temp_dir", Path(self.server.temp_dir)),
+            ("server.upload_dir", Path(self.server.upload_dir)),
+            ("funasr.model_dir", Path(self.funasr.model_dir)),
+            ("database.parent", Path(self.database.path).parent),
+            ("logging.log_dir", Path(self.logging.log_dir)),
+        )
+
     def setup_directories(self):
         """创建必要的目录"""
-        is_worker = os.getenv('FUNASR_WORKER_MODE') == '1'
-
-        directories = [
-            self.server.temp_dir,
-            self.server.upload_dir,
-            self.funasr.model_dir,
-            Path(self.database.path).parent,
-            self.logging.log_dir
-        ]
-
-        for directory in directories:
+        for _, directory in self.config_directory_targets():
             try:
                 Path(directory).mkdir(parents=True, exist_ok=True)
                 # 目录创建成功时不输出日志,避免影响日志系统初始化
@@ -871,6 +845,11 @@ class Config(BaseModel):
                 sys.exit(1)
 
 
-# 全局配置实例
-config = Config.load_from_file()
-config.setup_directories()
+# 全局配置实例。仅 `python -m src.core.doctor_config_probe` 上下文跳过目录创建。
+_main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+_is_doctor_config_probe = getattr(_main_spec, "name", None) == "src.core.doctor_config_probe"
+if _is_doctor_config_probe:
+    config = None
+else:
+    config = Config.load_from_file()
+    config.setup_directories()
