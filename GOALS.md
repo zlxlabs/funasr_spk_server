@@ -3,8 +3,8 @@
 ## 项目目标
 
 - **目标**：让 VTA 生成的结构化 ASR 术语在服务端安全、可审计地进入各引擎，同时保持空值请求的旧行为。
-- **完成定义**：I1 协议/FunASR、I2 Qwen context、I4 doctor 均独立合并，并在各阶段拿到单测、CI 与真实入口证据；I3 仅向 VideoTranscriptAPI 创建交接 issue，不修改下游仓库。
-- **当前激活里程碑**：I4
+- **完成定义**：I1 协议/FunASR、I2 Qwen context、I4 doctor 均独立合并；可获得的单测、CI 与真实入口证据全部取证，暂不可得的证据须显式记录环境例外，不以本地结果冒充 CI 或真实入口；I3 仅向 VideoTranscriptAPI 创建交接 issue，不修改下游仓库。
+- **当前激活里程碑**：路线完成
 
 ## 里程碑路线图
 
@@ -43,15 +43,26 @@
 
 ### I4：只读 doctor 运维诊断
 
-- **状态**：进行中（PR #7 draft，分支 `feat/read-only-doctor-i4-v2`）
+- **状态**：已完成（PR #7 merged，`e4d9d66`）
 - **预期产出**：`scripts/doctor.py --json` 任意 cwd 输出单一 JSON，报告 provider/artifact/fallback 与退出码，严格无副作用。
 - **当前范围**：只读配置与工件诊断；不加载模型、不联网、不下载、不创建目录、不改变 capabilities schema。
 - **关键决策**：退出码固定 0/1/2；FunASR 动态缓存为 unknown/deferred；可选 word-align 缺失仅 WARN。
 - **已知阻塞**：无代码阻塞；I2 合并与路线审计已完成。CI workflow/status checks 缺失，不能伪称 CI 通过。
 - **推进前必须拿到的证据**：
-  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（本轮 65 passed）。
-  - [x] 配置 probe 真实 Config、env/.env 污染、目录目标只读矩阵与安全 IPC 元数据；环境：本地 venv/临时 fixture；真实入口：普通 `src.main` 污染回归、`python -m src.core.doctor_config_probe` stdout 无 raw path、目录文件/祖先不可用均 exit=2。
+  - [x] doctor unit/subprocess 与 capabilities 回归全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（doctor 64 + capabilities 7 = 71 passed）。
+  - [x] 配置 probe 真实 Config、env/.env 污染、目录目标只读矩阵与安全 IPC 元数据；环境：本地 venv/临时 fixture；真实入口：普通 `src.main` 污染回归、`python -m src.core.doctor_config_probe` stdout 无 raw path、目录文件/祖先不可用均 exit=2；目录 60 格 pairwise 与 NUL config probe 均覆盖。
   - [x] 多 cwd、provider/artifact 与副作用行为证据；环境：本地临时目录；真实入口：仓库根与独立临时 cwd 的绝对脚本 subprocess 均 stdout 单 JSON、stderr 分离、exit=1；strace 未见网络/端口/创建目录/写文件（仅做配置/工件 metadata stat，无模型加载/下载），环境与 git 状态快照无变化。
+  - [x] 评审收敛：R4/R5 连续零 P1；OCR skipped。仓库无 CI workflow/status checks，不宣称 CI 通过。
+  - [x] R5 接受不修：两个 P2（无效 engine/provider/runtime raw 值；非典型 provider import 可能 traceback）与一个 P3（只读 FunASR model dir）。
+
+## 最终路线审计（2026-08-08 / PR #7 / `e4d9d66`）
+
+- **里程碑真完成了吗？**：是。I1/I2/I4 代码路线均已完成并合并；I4 doctor 证据为 71 passed、60 格 pairwise + NUL probe，R4/R5 连续零 P1。真实 Qwen 模型入口不可得，真 FunASR integration 本轮未跑，均为已批准且如实记录的环境例外，不以 unit 结果替代。
+- **下一个目标还是对的吗？**：路线已完成，无新的激活里程碑；不因环境例外扩建模型/runtime 环境。
+- **有没有漏掉的里程碑？**：没有。I3 仅由 `VideoTranscriptAPI` issue #57 承接，不跨仓修改。
+- **新证据是否改变了工作顺序？**：没有；I1 → I2 → I4 顺序保持不变。
+- **done 的定义还成立吗？**：成立。完成定义按“证据可得则取证、不可得则显式环境例外”执行；仓库无 CI workflow/status checks，OCR skipped，不宣称 CI 绿。
+- **评审与范围边界**：R5 接受不修两个 P2（无效 engine/provider/runtime raw 值；非典型 provider import 可能 traceback）及只读 FunASR model dir P3。重复退化检测、context cache、质量 benchmark 仍 NOT in scope。
 
 ## I3 跨仓边界
 
