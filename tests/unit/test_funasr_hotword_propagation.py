@@ -47,7 +47,8 @@ def _build_transcriber(mode, hotword_seen):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mode", "terms", "expected"),
-    [("pool", ["Alpha", "Beta"], "Alpha Beta"), ("pool", [], ""), ("lock", ["Alpha", "Beta"], "Alpha Beta")],
+    [("pool", ["Alpha", "Beta"], "Alpha Beta"), ("pool", [], ""),
+     ("lock", ["Alpha", "Beta"], "Alpha Beta"), ("lock", [], "")],
 )
 async def test_funasr_hotword_reaches_pool_or_lock(mode, terms, expected):
     seen = []

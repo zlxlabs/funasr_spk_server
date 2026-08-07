@@ -78,3 +78,28 @@ async def test_worker_terms_skips_second_read_and_result_write(tmp_path, output_
     db.save_result.assert_not_called()
     params.assert_not_called()
     save_tag.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["json", "srt"])
+async def test_empty_terms_preserves_submit_worker_reads_and_final_write(tmp_path, output_format):
+    manager = TaskManager()
+    task = _task(
+        tmp_path, task_id=f"empty-{output_format}", output_format=output_format, terms=[],
+    )
+    manager.tasks[task.task_id] = task
+    transcriber = MagicMock(
+        transcribe=AsyncMock(return_value=_result(task.task_id, output_format)),
+    )
+    with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=transcriber), \
+         patch("src.core.task_manager.db_manager") as db, \
+         patch.object(manager, "_notify_task_progress", new=AsyncMock()), \
+         patch.object(manager, "_notify_task_complete", new=AsyncMock()), \
+         patch.object(manager, "_maybe_delete_task_file", new=AsyncMock()):
+        db.get_cached_result = AsyncMock(return_value=None)
+        db.save_result = AsyncMock()
+        await manager.submit_task(task.task_id, task.file_path)
+        await manager._process_task(task.task_id)
+
+    assert db.get_cached_result.await_count == 2
+    db.save_result.assert_awaited_once()
