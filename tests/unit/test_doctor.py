@@ -1,6 +1,7 @@
 """I4 doctor contract: strict read-only diagnostics and safe JSON output."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -67,7 +68,8 @@ def _doctor_fixture(tmp_path, config_data, dotenv_text="", process_env=None):
 def _run_fixture_doctor(root: Path, process_env=None):
     """在隔离 fixture 中执行 doctor，避免继承本机 FUNASR_* 污染。"""
     env = {key: value for key, value in os.environ.items() if not key.startswith("FUNASR_")}
-    env.update({"FUNASR_NOTIFICATION_ENABLED": "false", "PYTHONDONTWRITEBYTECODE": "1"})
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.update({"FUNASR_NOTIFICATION_ENABLED": "false"})
     env.update(process_env or {})
     return subprocess.run(
         [sys.executable, str(root / "scripts" / "doctor.py"), "--json"],
@@ -554,3 +556,16 @@ def test_doctor_probe_does_not_create_bytecode_or_directories(tmp_path):
     assert before == after
     assert not list(root.rglob("*.pyc"))
     assert not list(root.rglob("__pycache__"))
+
+
+def test_doctor_main_does_not_mutate_calling_process_environment(monkeypatch, capsys):
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    before = dict(os.environ)
+    spec = importlib.util.spec_from_file_location("doctor_environment_test", DOCTOR)
+    assert spec is not None and spec.loader is not None
+    doctor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(doctor)
+    monkeypatch.setattr(doctor, "_diagnose", lambda: ({"status": "ok"}, 0))
+    assert doctor.main(["--json"]) == 0
+    assert dict(os.environ) == before
+    capsys.readouterr()

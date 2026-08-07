@@ -15,9 +15,10 @@ os.environ["FUNASR_WORKER_MODE"] = "1"
 def run_config_probe(config_path: str) -> int:
     """加载并校验真实 Config，只返回不含原始输入的安全 JSON。"""
     try:
+        from pydantic import ValidationError
         from src.core.config import Config, ConfigFileUnavailableError
         from src.core.doctor_diagnostics import doctor_config_snapshot
-    except Exception:
+    except (ImportError, OSError):
         print(json.dumps({"status": "error", "error": "configuration_unavailable"}))
         return 2
 
@@ -27,10 +28,16 @@ def run_config_probe(config_path: str) -> int:
     except ConfigFileUnavailableError:
         print(json.dumps({"status": "error", "error": "configuration_unavailable"}))
         return 2
+    except (OSError, UnicodeDecodeError):
+        print(json.dumps({"status": "error", "error": "configuration_unavailable"}))
+        return 2
     except SystemExit:
         print(json.dumps({"status": "error", "error": "configuration_invalid"}))
         return 2
-    except Exception:
+    except ValidationError:
+        print(json.dumps({"status": "error", "error": "configuration_invalid"}))
+        return 2
+    except (TypeError, ValueError):
         print(json.dumps({"status": "error", "error": "configuration_invalid"}))
         return 2
 

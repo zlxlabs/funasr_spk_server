@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
-os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 sys.path.insert(0, str(ROOT))
 
 from src.core.doctor_diagnostics import (  # noqa: E402
@@ -136,28 +135,11 @@ def _diagnose() -> tuple[dict[str, object], int]:
     return report, code
 
 
-def _safe_error_report(error: str = "configuration_unavailable") -> dict[str, object]:
-    """将 doctor 自身异常收口为不含输入值的标准错误报告。"""
-    return build_doctor_report(
-        engine="unknown",
-        runtime="cpu",
-        configured_provider="unknown",
-        available_providers=[],
-        qwen_artifacts={},
-        funasr_dynamic_cache="unknown",
-        word_align_artifact={"exists": False, "type": "inactive", "size": 0},
-        config_errors=[error],
-    )
-
-
 def main(argv: list[str] | None = None) -> int:
     if (argv if argv is not None else sys.argv[1:]) != ["--json"]:
         print("doctor: expected --json", file=sys.stderr)
         return 2
-    try:
-        report, code = _diagnose()
-    except Exception:
-        report, code = _safe_error_report(), 2
+    report, code = _diagnose()
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     print(f"doctor: status={report['status']}", file=sys.stderr)
     return code
