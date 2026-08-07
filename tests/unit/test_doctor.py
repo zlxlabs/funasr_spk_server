@@ -184,3 +184,14 @@ def test_doctor_cli_does_not_echo_secret_or_artifact_paths(tmp_path):
     assert result.returncode == 1
     assert secret not in result.stdout
     assert secret not in result.stderr
+
+
+def test_doctor_funasr_does_not_require_qwen_provider(tmp_path):
+    result = _run_doctor(
+        tmp_path,
+        FUNASR_DEFAULT_ENGINE="funasr",
+        FUNASR_QWEN3_ASR_ENCODER_PROVIDER="unavailable-provider",
+    )
+    report = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert report["provider"]["fallback_would_occur"] is False

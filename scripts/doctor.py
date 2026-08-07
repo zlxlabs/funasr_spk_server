@@ -32,11 +32,11 @@ def _setting(section: dict, key: str, env_name: str, default=None):
     return os.environ.get(env_name, section.get(key, default))
 
 
-def _runtime() -> str:
+def _runtime(available: list[str]) -> str:
     forced = os.environ.get("FUNASR_RUNTIME", "").strip().lower()
     if forced in {"cpu", "cuda", "mac_ane"}:
         return forced
-    return "mac_ane" if platform.system() == "Darwin" else "cpu"
+    return "cuda" if "CUDAExecutionProvider" in available and platform.system() == "Linux" else "mac_ane" if platform.system() == "Darwin" else "cpu"
 
 
 def _available_providers() -> list[str]:
@@ -44,7 +44,7 @@ def _available_providers() -> list[str]:
         import onnxruntime as ort
 
         return list(ort.get_available_providers())
-    except Exception:
+    except (ImportError, OSError, RuntimeError):
         return []
 
 
@@ -60,18 +60,19 @@ def _diagnose() -> tuple[dict[str, object], int]:
     profile = os.environ.get("FUNASR_PROFILE", "").strip().lower()
     profile_engine = {"cuda_prod": "qwen3", "cuda_dev": "qwen3", "mac_prod": "funasr", "mac_dev": "funasr"}
     engine = os.environ.get("FUNASR_DEFAULT_ENGINE", profile_engine.get(profile, transcription.get("default_engine", "funasr")))
-    provider = _setting(qwen3, "asr_encoder_provider", "FUNASR_QWEN3_ASR_ENCODER_PROVIDER", "auto")
+    provider = "cpu" if engine != "qwen3" else _setting(qwen3, "asr_encoder_provider", "FUNASR_QWEN3_ASR_ENCODER_PROVIDER", {"cuda_prod": "cuda", "cuda_dev": "cuda"}.get(profile, "auto"))
     qwen_paths = {
         "asr_model_dir": _setting(qwen3, "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR", "./models/qwen3_diarize/Qwen3-ASR-1.7B"),
         "segmentation_model": _setting(qwen3, "segmentation_model", "FUNASR_QWEN3_SEGMENTATION_MODEL", "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx"),
         "embedding_model": _setting(qwen3, "embedding_model", "FUNASR_QWEN3_EMBEDDING_MODEL", "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx"),
     }
     word_align = _setting(qwen3, "word_align_model_path", "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH", "./models/qwen3_diarize/ctc_forced_aligner/model.onnx")
+    available = _available_providers()
     report = build_doctor_report(
         engine=str(engine).strip().lower(),
-        runtime=_runtime(),
+        runtime=_runtime(available),
         configured_provider=str(provider),
-        available_providers=_available_providers(),
+        available_providers=available,
         qwen_artifacts={name: describe_doctor_artifact(_path(value)) for name, value in qwen_paths.items()},
         funasr_dynamic_cache="deferred",
         word_align_artifact=describe_doctor_artifact(_path(word_align)),
