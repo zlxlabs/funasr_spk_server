@@ -325,6 +325,9 @@ class TaskManager:
         """
         if task.force_refresh:
             return False
+        from src.core.database import cache_allowed_for
+        if not cache_allowed_for(task.options):
+            return False
         from src.core.database import cache_params_for
         cache_engine, allow_cross = cache_params_for(task)
         cached_result = await db_manager.get_cached_result(
@@ -688,9 +691,8 @@ class TaskManager:
             # 更新任务结果
             # 注: status=COMPLETED 在 task.result 组装完成后才翻转 (见下), 否则
             # save_result 的 await 窗口里轮询方会看到 COMPLETED 但 result=None.
-            # 缓存写入 tag 与查询同 key (折维收拢在 database.cache_params_for, D4)
-            from src.core.database import cache_params_for
-            cache_engine_tag = cache_params_for(task)[0]
+            from src.core.database import cache_allowed_for
+            cache_allowed = cache_allowed_for(task.options)
             fresh_projected = False  # fresh 出口是否做了投影 (funasr 照算路径)
             has_words = None         # JSON 出口词级时间戳是否实际挂上 (驱动 metadata delivered)
             word_align_error_msg = None  # word_align 失败原因 (回显 metadata.word_align_error)
@@ -712,8 +714,10 @@ class TaskManager:
                     error=None
                 )
 
-                # 保存到缓存（先于投影: 缓存永远存引擎真算结果, 投影是请求级出口行为）
-                await db_manager.save_result(transcription_result, result["raw_result"], engine=cache_engine_tag)
+                if cache_allowed:
+                    from src.core.database import cache_params_for
+                    cache_engine_tag = cache_params_for(task)[0]
+                    await db_manager.save_result(transcription_result, result["raw_result"], engine=cache_engine_tag)
 
                 # fresh 结果出口投影 (D3 双出口之二): funasr 照算带 speaker,
                 # diarize=false 请求需投影抹 speaker + SRT 重渲染无前缀.
@@ -736,11 +740,11 @@ class TaskManager:
                 # 决策 B (codex #5): 请求 word_align 但 segments 实际无词 (CUDA+CPU 都失败) →
                 # 写入降 +wa tag, 不毒化该文件 +wa 缓存. has_words 也驱动 metadata delivered.
                 has_words = any(getattr(s, "words", None) for s in transcription_result.segments)
-                from src.core.database import cache_save_engine_for
-                save_tag = cache_save_engine_for(task, has_words)
-
-                # 保存到缓存（先于投影, 同上）— funasr 存句级真值, 合并视图只在 serve 出口
-                await db_manager.save_result(transcription_result, raw_result, engine=save_tag)
+                if cache_allowed:
+                    from src.core.database import cache_save_engine_for
+                    save_tag = cache_save_engine_for(task, has_words)
+                    # 保存到缓存（先于投影, 同上）— funasr 存句级真值, 合并视图只在 serve 出口
+                    await db_manager.save_result(transcription_result, raw_result, engine=save_tag)
                 # word_align 失败原因 (fresh 出口回显 metadata.word_align_error, codex #11)
                 # funasr 的 raw_result 是 model.generate() 原始 list (非 dict), word_align 是
                 # qwen3 专属字段 → 仅 dict 形态才取, 否则 None (修生产事故: 'list' object has no attribute 'get')

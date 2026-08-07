@@ -11,7 +11,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 
 from src.api.websocket_handler import WebSocketHandler
-from src.models.schemas import FileUploadRequest
+from src.models.schemas import FileUploadRequest, TranscribeOptions, TranscriptionTask
 
 
 @pytest.fixture
@@ -91,3 +91,44 @@ class TestSingleUploadCacheLookupPassesEngine:
             if engine_arg is None and len(call.args) >= 3:
                 engine_arg = call.args[2]
             assert engine_arg == "qwen3", f"cache lookup 应带 engine=qwen3，调用: {call}"
+
+
+@pytest.mark.asyncio
+async def test_nonempty_terms_skip_single_upload_cache_lookup(handler, fake_websocket):
+    data = {"file_name": "x.wav", "file_size": 100, "file_hash": "h-terms", "terms": ["Alpha"]}
+    task = TranscriptionTask(task_id="t-terms", file_name="x.wav", file_path="", file_size=100,
+                             file_hash="h-terms", options=TranscribeOptions(terms=["Alpha"]))
+    with patch("src.core.task_manager.task_manager") as mock_tm, \
+         patch("src.core.database.db_manager") as mock_db, \
+         patch("src.core.database.cache_params_for") as params:
+        mock_tm.create_task = AsyncMock(return_value=task)
+        mock_db.get_cached_result = AsyncMock(return_value=None)
+        await handler._handle_upload_request(fake_websocket, "conn-terms", data)
+    mock_db.get_cached_result.assert_not_called()
+    params.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nonempty_terms_skip_chunked_finalize_cache_lookup(handler, fake_websocket, tmp_path):
+    temp_file = tmp_path / "chunks.bin"
+    temp_file.write_bytes(b"x")
+    request = FileUploadRequest(file_name="x.wav", file_size=1, file_hash="h-terms", terms=["Alpha"])
+    task = TranscriptionTask(task_id="t-ch-terms", file_name="x.wav", file_path="", file_size=1,
+                             file_hash="h-terms", options=TranscribeOptions(terms=["Alpha"]))
+    handler.upload_sessions["t-ch-terms"] = {
+        "task_id": "t-ch-terms", "file_name": "x.wav", "file_size": 1, "file_hash": "h-terms",
+        "temp_file_path": str(temp_file), "finalized_file_path": str(temp_file), "force_refresh": False,
+        "output_format": "json", "engine": None, "language": None, "diarize": True,
+        "word_align": None, "terms": ["Alpha"], "request": request,
+    }
+    with patch.object(handler, "_calculate_file_hash", return_value="h-terms"), \
+         patch.object(handler, "_cleanup_upload_session", new=AsyncMock()), \
+         patch("src.core.database.db_manager") as db, \
+         patch("src.core.database.cache_params") as params, \
+         patch("src.core.task_manager.task_manager") as mock_tm:
+        db.get_cached_result = AsyncMock(return_value=None)
+        mock_tm.create_task = AsyncMock(return_value=task)
+        mock_tm.submit_task = AsyncMock(return_value=None)
+        await handler._finalize_chunked_upload(fake_websocket, "t-ch-terms")
+    db.get_cached_result.assert_not_called()
+    params.assert_not_called()

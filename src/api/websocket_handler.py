@@ -243,7 +243,8 @@ class WebSocketHandler:
             
             # 检查缓存（如果不强制刷新）
             # cache key 含 engine; word_align / diarize 折维收拢在 cache_params_for (D4)
-            if not request.force_refresh:
+            from src.core.database import cache_allowed_for
+            if not request.force_refresh and cache_allowed_for(task.options):
                 from src.core.database import db_manager, cache_params_for
                 _ce, _allow = cache_params_for(task)
                 cached_result = await db_manager.get_cached_result(
@@ -773,7 +774,6 @@ class WebSocketHandler:
             # cache key 含 engine（session 中已记录，无则回退 default_engine）;
             # word_align / diarize 折维收拢在 cache_params (D4, 此处无 task 对象走低层入口)
             if not session["force_refresh"]:
-                from src.core.database import db_manager, cache_params
                 from src.core.config import config as _config
                 from src.models.schemas import TranscribeOptions, resolve_word_align
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
@@ -786,11 +786,16 @@ class WebSocketHandler:
                         session.get("word_align"), _config.qwen3.word_align_enabled
                     ),
                 )
-                _ce, _allow = cache_params(_engine_for_cache, _session_options)
-                cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
-                    options=_session_options,
-                )
+                from src.core.database import cache_allowed_for
+                if cache_allowed_for(_session_options):
+                    from src.core.database import db_manager, cache_params
+                    _ce, _allow = cache_params(_engine_for_cache, _session_options)
+                    cached_result = await db_manager.get_cached_result(
+                        session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
+                        options=_session_options,
+                    )
+                else:
+                    cached_result = None
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")
 
