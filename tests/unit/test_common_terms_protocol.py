@@ -1,7 +1,9 @@
 """I1 terms 协议：规范化、authority 和 invalid_terms 映射。"""
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 from src.api.websocket_handler import WebSocketHandler
 from src.models.schemas import FileUploadRequest
@@ -44,6 +46,23 @@ async def test_upload_validation_maps_only_invalid_terms_to_protocol_error():
     await handler._handle_upload_request(websocket, "conn-terms", data)
     sent = websocket.send.await_args.args[0]
     assert all(token in sent for token in ('"type":"error"', '"error":"invalid_terms"', '"reason":"too_many_raw_items"'))
+
+@pytest.mark.asyncio
+async def test_malformed_terms_error_redacts_input_from_payload_and_log():
+    handler, websocket, records = WebSocketHandler(), MagicMock(), []
+    websocket.send = AsyncMock()
+    secret = "TOP_SECRET_TERMS"
+    sink = logger.add(records.append, level="ERROR")
+    try:
+        await handler._handle_upload_request(websocket, "conn-terms", {
+            "file_name": "terms.wav", "file_size": 1, "file_hash": "h",
+            "terms": {"secret": secret},
+        })
+    finally:
+        logger.remove(sink)
+    payload = json.loads(websocket.send.await_args.args[0])
+    assert payload["data"]["error"] == "upload_error"
+    assert secret not in websocket.send.await_args.args[0] + "".join(map(str, records))
 
 
 @pytest.mark.asyncio

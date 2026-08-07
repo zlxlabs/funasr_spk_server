@@ -11,6 +11,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 
 from src.api.websocket_handler import WebSocketHandler
+from src.models.schemas import FileUploadRequest
 
 
 @pytest.fixture
@@ -36,7 +37,7 @@ class TestChunkedUploadSessionCapturesEngine:
             "total_chunks": 1,
             "engine": "qwen3",
         }
-        await handler._handle_chunked_upload_request(fake_websocket, "conn-1", data)
+        await handler._handle_chunked_upload_request(fake_websocket, "conn-1", data, request=FileUploadRequest(**data))
         # 应该新建一个 session
         assert len(handler.upload_sessions) == 1
         session = next(iter(handler.upload_sessions.values()))
@@ -50,7 +51,7 @@ class TestChunkedUploadSessionCapturesEngine:
             "file_hash": "h-x",
             "total_chunks": 1,
         }
-        await handler._handle_chunked_upload_request(fake_websocket, "conn-1", data)
+        await handler._handle_chunked_upload_request(fake_websocket, "conn-1", data, request=FileUploadRequest(**data))
         session = next(iter(handler.upload_sessions.values()))
         assert session.get("engine") is None
 

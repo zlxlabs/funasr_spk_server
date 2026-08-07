@@ -299,8 +299,9 @@ class WebSocketHandler:
                     "message": "术语列表校验失败",
                 })
                 return
-            logger.error(f"处理上传请求失败: {e}")
-            await self._send_error(websocket, "upload_error", str(e))
+            validation_summary = [(detail.get("type"), detail.get("loc")) for detail in e.errors()]
+            logger.error("处理上传请求失败: validation_errors={}", validation_summary)
+            await self._send_error(websocket, "upload_error", "上传请求参数无效")
         except Exception as e:
             logger.error(f"处理上传请求失败: {e}")
             await self._send_error(websocket, "upload_error", str(e))
@@ -606,12 +607,10 @@ class WebSocketHandler:
         websocket: WebSocketServerProtocol,
         connection_id: str,
         data: dict,
-        request: Optional[FileUploadRequest] = None,
+        request: FileUploadRequest,
     ):
         """处理分片上传请求"""
         try:
-            if request is None:
-                request = FileUploadRequest(**data)
             # 先清遗弃 session（机会式 sweep），再做硬数量上限准入控制，
             # 防恶意/坏客户端把 temp 文件堆满磁盘（codex: 保留 session 的磁盘压力面）
             self._sweep_upload_sessions()
