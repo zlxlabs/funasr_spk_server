@@ -78,6 +78,7 @@ async def test_funasr_pool_task_json_keeps_hotword_top_level(tmp_path):
     process.poll.return_value = None
     pool.worker_processes = [process]
     pool._ensure_workers_alive = AsyncMock()
+    pool._calculate_timeout = MagicMock(return_value=1.0)
 
     with patch("src.core.file_based_process_pool.asyncio.sleep", side_effect=RuntimeError("stop")), \
          pytest.raises(RuntimeError, match="stop"):
