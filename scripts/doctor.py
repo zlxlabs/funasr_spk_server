@@ -70,9 +70,13 @@ def _diagnose() -> tuple[dict[str, object], int]:
     available = _available_providers()
     paths = effective["qwen_paths"]
     assert isinstance(paths, dict)
-    qwen_artifacts = {name: describe_doctor_artifact(_path(value)) for name, value in paths.items() if name != "word_align_model_path"}
+    qwen_artifacts = (
+        {name: describe_doctor_artifact(_path(value)) for name, value in paths.items() if name != "word_align_model_path"}
+        if effective["engine"] == "qwen3"
+        else {}
+    )
     provider = str(effective["provider"])
-    if provider == "coreml_ane_full":
+    if effective["engine"] == "qwen3" and provider == "coreml_ane_full":
         model_dir = _path(paths.get("asr_model_dir"))
         qwen_artifacts["backend_mlpackage"] = describe_doctor_artifact(
             model_dir / "qwen3_asr_encoder_backend.mlpackage" if model_dir is not None else None
@@ -84,7 +88,11 @@ def _diagnose() -> tuple[dict[str, object], int]:
         available_providers=available,
         qwen_artifacts=qwen_artifacts,
         funasr_dynamic_cache="deferred",
-        word_align_artifact=describe_doctor_artifact(_path(paths.get("word_align_model_path"))),
+        word_align_artifact=(
+            describe_doctor_artifact(_path(paths.get("word_align_model_path")))
+            if effective["engine"] == "qwen3"
+            else {"exists": False, "type": "inactive", "size": 0}
+        ),
         platform_name=platform.system().lower(),
         config_errors=errors,
         config_warnings=warnings,

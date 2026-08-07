@@ -29,6 +29,15 @@ _ENV_FIELDS = {
 }
 _SUPPORTED_ENGINES = {"funasr", "qwen3"}
 _SUPPORTED_RUNTIMES = {"cpu", "cuda", "mac_ane"}
+_PROVIDER_NAMES = {
+    "auto",
+    "cpu",
+    "cuda",
+    "tensorrt",
+    "trt",
+    "coreml_ane_fe",
+    "coreml_ane_full",
+}
 
 
 def _merge_mapping(base: dict[str, object], override: Mapping[str, object]) -> None:
@@ -48,13 +57,19 @@ def resolve_doctor_config(
     errors: list[str] = []
     warnings: list[str] = []
     resolved = copy.deepcopy(_DEFAULTS)
+    transcription_invalid = False
+    qwen_invalid = False
     if isinstance(config_data, Mapping):
-        for section_name in ("transcription", "qwen3"):
-            section = config_data.get(section_name, {})
-            if not isinstance(section, Mapping):
-                errors.append(f"configuration_section_invalid:{section_name}")
-            else:
-                _merge_mapping(resolved[section_name], section)  # type: ignore[arg-type]
+        transcription = config_data.get("transcription", {})
+        qwen = config_data.get("qwen3", {})
+        if isinstance(transcription, Mapping):
+            _merge_mapping(resolved["transcription"], transcription)  # type: ignore[arg-type]
+        else:
+            transcription_invalid = True
+        if isinstance(qwen, Mapping):
+            _merge_mapping(resolved["qwen3"], qwen)  # type: ignore[arg-type]
+        else:
+            qwen_invalid = True
     else:
         errors.append("configuration_root_invalid")
 
@@ -69,7 +84,7 @@ def resolve_doctor_config(
         else:
             _merge_mapping(resolved, profile)
     for env_name, (section_name, field_name) in _ENV_FIELDS.items():
-        if env_name in environment:
+        if env_name in environment and environment[env_name] is not None:
             resolved[section_name][field_name] = environment[env_name]  # type: ignore[index]
 
     transcription = resolved.get("transcription")
@@ -85,12 +100,18 @@ def resolve_doctor_config(
         if engine not in _SUPPORTED_ENGINES:
             errors.append("unsupported_engine")
             engine = "unknown"
+    if transcription_invalid:
+        errors.append("configuration_section_invalid:transcription")
 
     provider_value = qwen3.get("asr_encoder_provider")
     if engine == "qwen3":
-        if not isinstance(provider_value, str) or not provider_value.strip():
+        if qwen_invalid:
+            errors.append("configuration_section_invalid:qwen3")
+        if provider_value is None or not isinstance(provider_value, str):
             errors.append("invalid_provider_type")
             provider = "unknown"
+        elif not provider_value.strip():
+            provider = "auto"
         else:
             provider = provider_value.strip().lower()
     else:
@@ -99,11 +120,15 @@ def resolve_doctor_config(
     qwen_paths: dict[str, object] = {}
     for field_name in ("asr_model_dir", "segmentation_model", "embedding_model", "word_align_model_path"):
         value = qwen3.get(field_name)
-        if not isinstance(value, str) or not value.strip():
+        if field_name == "word_align_model_path":
+            qwen_paths[field_name] = value if isinstance(value, str) else ""
+        elif engine == "qwen3" and (not isinstance(value, str) or not value.strip()):
             errors.append(f"invalid_artifact_path:{field_name}")
             qwen_paths[field_name] = ""
-        else:
+        elif isinstance(value, str) and value.strip():
             qwen_paths[field_name] = value
+        else:
+            qwen_paths[field_name] = ""
 
     runtime_value = environment.get("FUNASR_RUNTIME", "")
     runtime_override = runtime_value.strip().lower() if isinstance(runtime_value, str) else ""
@@ -147,20 +172,29 @@ def describe_doctor_artifact(path: object) -> dict[str, object]:
     return {"exists": True, "type": kind, "size": size}
 
 
-def _provider_name(configured: str, runtime: str, platform_name: str) -> str | None:
-    value = configured.strip().lower()
-    if value == "auto":
-        value = "coreml_ane_fe" if platform_name == "darwin" else "cpu"
-    return {
+def _provider_name(
+    configured: str,
+    runtime: str,
+    platform_name: str,
+    available: Sequence[str],
+) -> tuple[str, str, bool, bool]:
+    """Return target, actual EP, fallback flag, and unsupported-config flag."""
+    del runtime
+    value = configured.strip().lower() or "auto"
+    platform_default = "CoreMLExecutionProvider" if platform_name == "darwin" else "CPUExecutionProvider"
+    target = {
+        "auto": platform_default,
         "cpu": "CPUExecutionProvider",
         "cuda": "CUDAExecutionProvider",
-        "coreml": "CoreMLExecutionProvider",
-        "coreml_ane_fe": "CoreMLExecutionProvider",
-        "coreml_ane_full": "CoreMLExecutionProvider",
         "tensorrt": "TensorrtExecutionProvider",
         "trt": "TensorrtExecutionProvider",
-        "dml": "DmlExecutionProvider",
-    }.get(value)
+        "coreml_ane_fe": "CoreMLExecutionProvider",
+        "coreml_ane_full": "CoreMLExecutionProvider",
+    }.get(value, platform_default)
+    target_available = target in available
+    effective = target if target_available else "CPUExecutionProvider"
+    unsupported = value not in _PROVIDER_NAMES
+    return target, effective, unsupported or not target_available, unsupported
 
 
 def _artifact_usable(artifact: Mapping[str, object], expected_type: str) -> bool:
@@ -199,14 +233,18 @@ def build_doctor_report(
         provider = {"configured": "not_applicable", "effective": "not_applicable", "available": available, "fallback_would_occur": False}
         provider_fallback = False
     else:
-        effective = _provider_name(configured_provider, runtime, platform_name)
-        safe_configured = configured_provider.strip().lower() if configured_provider.strip() else "unknown"
-        provider_fallback = effective is None or effective not in available
-        if provider_fallback:
+        target, effective, provider_fallback, unsupported = _provider_name(
+            configured_provider, runtime, platform_name, available
+        )
+        configured_value = configured_provider.strip().lower()
+        safe_configured = configured_value if configured_value in _PROVIDER_NAMES | {"dml", "coreml"} else "unknown"
+        if unsupported:
+            errors.append("unsupported_provider")
+        if target not in available:
             errors.append("configured_provider_unavailable")
-        provider = {"configured": safe_configured if effective is not None else "unknown", "effective": effective or "unavailable", "available": available, "fallback_would_occur": provider_fallback}
+        provider = {"configured": safe_configured, "effective": effective, "available": available, "fallback_would_occur": provider_fallback}
         expected = {"asr_model_dir": "directory", "segmentation_model": "file", "embedding_model": "file"}
-        if configured_provider.strip().lower() == "coreml_ane_full":
+        if configured_value == "coreml_ane_full":
             expected["backend_mlpackage"] = "directory"
         for name, kind in expected.items():
             artifact = qwen.get(name, {"exists": False, "type": "missing", "size": 0})
@@ -217,9 +255,7 @@ def build_doctor_report(
                     provider["fallback_would_occur"] = True
 
     word_align = dict(word_align_artifact)
-    if word_align.get("type") == "invalid":
-        errors.append("invalid_artifact_path:word_align_model_path")
-    elif not _artifact_usable(word_align, "file"):
+    if engine == "qwen3" and not _artifact_usable(word_align, "file"):
         warnings.append("optional_word-align_unavailable")
     status = "error" if errors else "warning" if warnings else "ok"
     return {

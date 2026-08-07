@@ -155,32 +155,124 @@ def test_doctor_effective_config_uses_dotenv_profile_then_process_env():
 
 
 @pytest.mark.parametrize(
-    ("configured", "available", "effective"),
+    ("configured", "platform_name", "available", "effective", "fallback", "error"),
     [
-        ("auto", ["CPUExecutionProvider", "CUDAExecutionProvider"], "CPUExecutionProvider"),
-        ("tensorrt", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider"),
-        ("trt", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider"),
-        ("dml", ["DmlExecutionProvider"], "DmlExecutionProvider"),
+        ("auto", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", False, None),
+        ("auto", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", False, None),
+        ("cpu", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", False, None),
+        ("cuda", "linux", ["CUDAExecutionProvider"], "CUDAExecutionProvider", False, None),
+        ("cuda", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", True, "configured_provider_unavailable"),
+        ("tensorrt", "linux", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider", False, None),
+        ("trt", "linux", ["TensorrtExecutionProvider"], "TensorrtExecutionProvider", False, None),
+        ("coreml_ane_fe", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", False, None),
+        ("coreml_ane_full", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", False, None),
+        ("dml", "linux", ["CPUExecutionProvider"], "CPUExecutionProvider", True, "unsupported_provider"),
+        ("coreml", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", True, "unsupported_provider"),
+        ("foo", "darwin", ["CoreMLExecutionProvider"], "CoreMLExecutionProvider", True, "unsupported_provider"),
     ],
 )
-def test_doctor_provider_resolution_matches_qwen_supported_paths(configured, available, effective):
+def test_doctor_provider_resolution_matches_qwen_supported_paths(
+    configured, platform_name, available, effective, fallback, error
+):
     artifact = {"exists": True, "type": "file", "size": 1}
+    qwen_artifacts = {
+        "asr_model_dir": {"exists": True, "type": "directory", "size": 1},
+        "segmentation_model": artifact,
+        "embedding_model": artifact,
+    }
+    if configured == "coreml_ane_full":
+        qwen_artifacts["backend_mlpackage"] = {
+            "exists": True,
+            "type": "directory",
+            "size": 1,
+        }
     report = build_doctor_report(
         engine="qwen3",
         runtime="cuda",
-        platform_name="linux",
+        platform_name=platform_name,
         configured_provider=configured,
         available_providers=available,
+        qwen_artifacts=qwen_artifacts,
+        funasr_dynamic_cache="deferred",
+        word_align_artifact=artifact,
+    )
+    assert report["provider"]["effective"] == effective
+    assert report["fallback_would_occur"] is fallback
+    if error:
+        assert error in report["errors"]
+    else:
+        assert report["errors"] == []
+
+
+def test_doctor_inactive_qwen_fields_do_not_affect_funasr():
+    result = resolve_doctor_config(
+        {"qwen3": {"asr_model_dir": None, "word_align_model_path": ""}},
+        {},
+        {},
+    )
+    assert result["engine"] == "funasr"
+    assert result["errors"] == []
+    report = build_doctor_report(
+        engine="funasr",
+        runtime="cpu",
+        configured_provider="not_applicable",
+        available_providers=["CPUExecutionProvider"],
+        qwen_artifacts={},
+        funasr_dynamic_cache="deferred",
+        word_align_artifact={"exists": False, "type": "invalid", "size": 0},
+    )
+    assert report["errors"] == []
+    assert report["warnings"] == ["funasr_dynamic_cache_deferred"]
+
+
+@pytest.mark.parametrize("word_align_artifact", [
+    {"exists": False, "type": "invalid", "size": 0},
+    {"exists": False, "type": "missing", "size": 0},
+    {"exists": True, "type": "file", "size": 0},
+    {"exists": True, "type": "directory", "size": 1},
+])
+def test_doctor_qwen_word_align_is_optional(word_align_artifact):
+    artifact = {"exists": True, "type": "file", "size": 1}
+    report = build_doctor_report(
+        engine="qwen3",
+        runtime="cpu",
+        configured_provider="cpu",
+        available_providers=["CPUExecutionProvider"],
         qwen_artifacts={
             "asr_model_dir": {"exists": True, "type": "directory", "size": 1},
             "segmentation_model": artifact,
             "embedding_model": artifact,
         },
         funasr_dynamic_cache="deferred",
-        word_align_artifact=artifact,
+        word_align_artifact=word_align_artifact,
     )
-    assert report["provider"]["effective"] == effective
-    assert report["fallback_would_occur"] is False
+    assert report["status"] == "warning"
+    assert report["errors"] == []
+    assert report["warnings"] == ["optional_word-align_unavailable"]
+
+
+def test_doctor_dotenv_bare_keys_do_not_override_defaults():
+    result = resolve_doctor_config(
+        {},
+        {
+            "FUNASR_DEFAULT_ENGINE": None,
+            "FUNASR_QWEN3_ASR_ENCODER_PROVIDER": None,
+        },
+        {"FUNASR_DEFAULT_ENGINE": "qwen3"},
+    )
+    assert result["engine"] == "qwen3"
+    assert result["provider"] == "auto"
+    assert result["errors"] == []
+
+
+def test_doctor_empty_qwen_provider_uses_auto():
+    result = resolve_doctor_config(
+        {"transcription": {"default_engine": "qwen3"}},
+        {},
+        {"FUNASR_QWEN3_ASR_ENCODER_PROVIDER": ""},
+    )
+    assert result["provider"] == "auto"
+    assert result["errors"] == []
 
 
 @pytest.mark.parametrize(
@@ -189,8 +281,7 @@ def test_doctor_provider_resolution_matches_qwen_supported_paths(configured, ava
         [],
         {"transcription": {"default_engine": "bogus"}},
         {"transcription": {"default_engine": ""}},
-        {"qwen3": {"asr_model_dir": ""}},
-        {"qwen3": {"word_align_model_path": None}},
+        {"transcription": {"default_engine": "qwen3"}, "qwen3": {"asr_model_dir": None}},
     ],
 )
 def test_doctor_invalid_config_returns_json_exit_two(tmp_path, config_data):
