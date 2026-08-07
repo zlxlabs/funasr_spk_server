@@ -260,13 +260,13 @@ class TestFreshExitMetadata:
         assert task.result is None
 
 
-def test_terms_metadata_is_funasr_only():
+def test_terms_metadata_is_supported_engine_only():
     funasr = build_result_metadata(engine="funasr", options=TranscribeOptions(terms=["Alpha"]))
     qwen = build_result_metadata(engine="qwen3", options=TranscribeOptions(terms=["Alpha"]))
     assert funasr["context_applied"] is True
     assert funasr["terms_count"] == 1
-    assert "context_applied" not in qwen
-    assert "terms_count" not in qwen
+    assert qwen["context_applied"] is True
+    assert qwen["terms_count"] == 1
 
 
 # ==================== 缓存命中出口组装 ====================
