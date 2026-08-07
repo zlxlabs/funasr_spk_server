@@ -49,8 +49,8 @@
 - **关键决策**：退出码固定 0/1/2；FunASR 动态缓存为 unknown/deferred；可选 word-align 缺失仅 WARN。
 - **已知阻塞**：无代码阻塞；I2 合并与路线审计已完成。CI workflow/status checks 缺失，不能伪称 CI 通过。
 - **推进前必须拿到的证据**：
-  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（16 passed）。
-  - [ ] 多 cwd、provider/artifact 与副作用行为的最终证据；环境：本地临时目录；真实入口：从仓库根和任意 cwd 执行 `venv/bin/python scripts/doctor.py --json`，确认 stdout 仅一份 JSON、stderr 分离且无副作用。
+  - [x] doctor unit/subprocess 矩阵当前全绿；环境：本地 venv；命令：`FUNASR_NOTIFICATION_ENABLED=false venv/bin/python -m pytest tests/unit/test_doctor.py tests/unit/test_http_capabilities.py`（17 passed）。
+  - [x] 多 cwd、provider/artifact 与副作用行为证据；环境：本地临时目录；真实入口：仓库根与独立临时 cwd 的绝对脚本 subprocess 均 stdout 单 JSON、stderr 分离、exit=1；strace 未见网络/端口/创建目录/写文件/模型路径访问，环境与 git 状态快照无变化。
 
 ## I3 跨仓边界
 
