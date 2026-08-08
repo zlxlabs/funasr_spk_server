@@ -4,7 +4,7 @@
 
 > 项目代号 `funasr_spk_server` 源于初代单引擎（FunASR）实现，现已演进为多引擎架构——**代号保留，不代表仅支持 FunASR**。
 
-🍎 **macOS（Apple Silicon）专属**：依赖 MPS GPU 加速。
+🍎 **当前生产目标是 macOS Apple Silicon**（`mac_prod` 默认 FunASR）；Linux CUDA 也是支持路径，使用 `cuda_prod` / `cuda_dev` 与 Qwen3。
 
 ## 功能特性
 
@@ -13,6 +13,8 @@
 - ✅ 双输出格式：JSON（合并说话人）& SRT（原始分割）
 - ✅ **双 ASR 引擎，按硬件选**（FunASR / Qwen3，见[引擎选型](#引擎选型按硬件)）
 - ✅ 词级时间戳（qwen3，per-request 开关）
+- ✅ 结构化 `terms` 术语提示：FunASR 作为 hotword，Qwen3 作为服务端控制的 context；空列表零影响
+- ✅ `/capabilities` 能力探针与 `scripts/doctor.py --json` 只读部署诊断
 - ✅ WebSocket 实时通信 + 任务队列 + 高负载准入控制
 - ✅ 异步轮询契约（批量 `task_status_batch`，根治高负载 300s 超时）
 - ✅ 按 `(file_hash, engine)` 的智能缓存，相同文件秒回
@@ -27,7 +29,7 @@ README 只讲「是什么 + 怎么快速跑起来」，详细内容在 `docs/`�
 |---|---|
 | 📂 文档总索引 | [docs/README.md](docs/README.md) |
 | 🔌 接入客户端（WebSocket 协议 / 上传 / 输出格式 / 异步轮询 / 故障排除） | [docs/使用/客户端交互指南.md](docs/使用/客户端交互指南.md) |
-| 🚀 部署（prod PM2 / dev 前台 / 环境要求） | [docs/部署.md](docs/部署.md) |
+| 🚀 部署（Mac 生产 PM2 / Linux CUDA / doctor 验收） | [docs/部署.md](docs/部署.md) |
 | 🧩 服务端协议（状态机 / 并发控制 / 消息规格） | [docs/开发/Server-Client 交互协议.md](docs/开发/Server-Client%20交互协议.md) |
 | ⚙️ 架构 / 配置体系 / 引擎与池 / 加新引擎 | [CLAUDE.md](CLAUDE.md) |
 | 🔧 配置项全集 | `.env.example`（env 权威）+ `config.json` |
@@ -49,7 +51,7 @@ WebSocket Handler ──▶ Task Manager ──▶ ASR Engine (dispatch)
 
 ### 环境要求
 
-- macOS 13+（Apple Silicon）
+- Mac 生产：macOS 13+（Apple Silicon）；Linux CUDA：支持 CUDA runtime 与 Qwen3
 - Python 3.12 + FFmpeg（`brew install ffmpeg`）
 - 8GB+ 内存（推荐 16GB）；首次运行自动下载模型（~2GB）
 
@@ -70,6 +72,10 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 
 最小流程：`connect → upload_request → upload_data → 等 task_complete`；批量场景用 `task_status_batch` 异步轮询。完整协议、字段表、Python 示例、输出格式、错误处理见 **[客户端交互指南](docs/使用/客户端交互指南.md)**。
 
+`upload_request.data.terms` 是可选的结构化术语列表。服务端会规范化并校验；空列表不改变识别行为。有效术语不会读取普通缓存，以免把带术语结果误当成普通结果；响应 metadata 会回显 `terms_count` 与引擎相关的 `context_applied`。FunASR hotword、Qwen3 context、缓存与错误契约见[客户端指南](docs/使用/客户端交互指南.md)和[服务端协议](docs/开发/Server-Client%20交互协议.md)。
+
+上传前可用 `GET /capabilities` 确认当前引擎是否声明 `features.terms=true`；WebSocket `connected` 消息中的 `capabilities` 应与之完全一致，缺失或 `capability_id` 不一致时客户端应 fail-closed，不发送术语请求。
+
 ## 引擎选型（按硬件）
 
 部署时由 profile / `FUNASR_DEFAULT_ENGINE` 锁定一个引擎，运行时全局唯一：
@@ -87,6 +93,7 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 
 ```bash
 curl http://<host>:<port>/health     # 存活探针: 200 healthy / 503 degraded (JSON)
+curl http://<host>:<port>/capabilities # 当前 engine/runtime/features/capability_id
 curl http://<host>:<port>/metrics    # Prometheus 文本: 队列深度/在途/错误率/缓存命中/EMA/VRAM
 # 浏览器打开 http://<host>:<port>/  →  极简状态页 (自带, 每 3s 自刷, 零外部依赖)
 ```
@@ -94,6 +101,7 @@ curl http://<host>:<port>/metrics    # Prometheus 文本: 队列深度/在途/�
 - `/`（状态页）浏览器直接打开即可；绑 `0.0.0.0` 设了 token 时用 `http://host:端口/?token=xxx`。
 - `/health` 裸放（只是死活）；客户端可在打转录前预检。
 - `/metrics` 默认仅在显式绑 LAN/loopback 时裸放；`server.host=0.0.0.0` 时必须设 `FUNASR_METRICS_TOKEN`（否则拒绝，防全网段暴露），访问带 `?token=` 或 `Authorization`。
+- `scripts/doctor.py --json` 可从任意当前工作目录运行，严格只读检查配置、provider、模型工件和目录可用性：退出码 `0`=正常、`1`=警告、`2`=错误。它不创建目录、不写配置、不启动服务；详见[部署指南](docs/部署.md)。
 - 总开关 `FUNASR_METRICS_ENABLED`（默认 on）。设计与指标清单见 [docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md](docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md)。
 
 ## 测试
