@@ -1,6 +1,6 @@
 {
   "_comment_global": "本配置文件包含业务逻辑相关的配置项，环境相关和敏感信息请在 .env 文件中配置",
-  "_comment_env_override": "大部分配置项都可以通过环境变量覆盖，详见 .env.example 文件说明",
+  "_comment_env_override": "优先级为 defaults < config.json 显式值 < FUNASR_PROFILE < FUNASR_* env；大部分配置项都可以通过环境变量覆盖，详见 .env.example 文件说明",
 
   "server": {
     "_comment_host_port": "服务器地址和端口请在 .env 中配置: FUNASR_SERVER_HOST, FUNASR_SERVER_PORT",
@@ -36,7 +36,7 @@
     "segmentation_model": "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx",
     "embedding_model": "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx",
 
-    "_comment_preset": "PoC 报告 preset=auto 普适最优: fp32 segmentation + NeMo TitaNet + cpu + 8 threads + 自适应聚类",
+    "_comment_preset": "PoC 报告 preset=auto 普适最优: fp32 segmentation + NeMo TitaNet + cpu + runtime-aware threads + 自适应聚类",
     "num_speakers": null,
     "cluster_threshold": 0.9,
     "num_threads": 8,
@@ -79,7 +79,7 @@
     "_comment_max_concurrent_tasks": "可通过环境变量覆盖: FUNASR_MAX_CONCURRENT_TASKS",
 
     "max_queue_size": 150,
-    "_comment_max_queue_size": "队列上限=准入控制。设 150 让正常批量(偶尔 100+)不触发 queue_full——因现网客户端尚未优雅处理 queue_full 消息(它会当成 error)，先保证正常用法不撞墙。内存有 task_max_retained=500 兜底不怕大队列。注意：pool=1 + 客户端同步等待下，深队列任务仍会 300s 超时(被接受≈位置×单任务时长)，此为已知未尽问题，根治走异步轮询(TODOS #20)。可经 FUNASR_MAX_QUEUE_SIZE 调整。",
+    "_comment_max_queue_size": "队列上限=准入控制。此处 config.json 显式值 150 按优先级生效；FUNASR_PROFILE 或 FUNASR_MAX_QUEUE_SIZE 可在更高优先级覆盖，不与代码默认值擅自统一。异步客户端应在 task_queued/upload_complete 后用 task_status_batch 轮询，queue_full 按 retry_after 退避重试。",
 
     "concurrency_mode": "pool",
 
@@ -96,7 +96,7 @@
     "queue_status_enabled": true,
 
     "qwen3_pool_size": 3,
-    "_comment_qwen3_pool_size": "Qwen3 引擎专用 worker pool 大小(PoC v5 sweet spot 3, GPU 97% 满载). 独立于 max_concurrent_tasks. 可通过环境变量覆盖: FUNASR_QWEN3_POOL_SIZE"
+    "_comment_qwen3_pool_size": "Qwen3 引擎专用 worker pool 大小。此处 config.json 显式值 3 按优先级生效；profile/env 可在更高优先级覆盖，实际值按显存与并发需求设置。独立于 max_concurrent_tasks。可通过环境变量覆盖: FUNASR_QWEN3_POOL_SIZE"
   },
 
   "database": {

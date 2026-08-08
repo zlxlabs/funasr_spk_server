@@ -2,7 +2,23 @@
 
 ## 概述
 
-本文档详细说明 FunASR 转录服务器与客户端之间的 WebSocket 交互流程，包括任务开始、处理和结束的完整控制机制。
+本文档详细说明多引擎转录服务器与客户端之间的 WebSocket 交互流程，包括能力协商、术语提示、任务开始、处理和结束的完整控制机制。
+
+## 能力契约与 fail-closed
+
+服务端提供只读 HTTP `GET /capabilities`，响应只包含 `schema_version`、当前 `engine`、有效 `runtime`、`features.terms` 和由这些字段计算的 `capability_id`。当前 FunASR 与 Qwen3 都声明 `features.terms: true`。WebSocket `connected` payload 的 `capabilities` 必须复用同一对象；客户端应比较两处 `capability_id`（最好比较完整对象），缺字段或不一致即 fail-closed，不发送术语请求。
+
+```json
+{
+  "schema_version": 1,
+  "engine": "funasr",
+  "runtime": "mac_ane",
+  "features": {"terms": true},
+  "capability_id": "<sha256-of-canonical-capability-fields>"
+}
+```
+
+`capability_id` 不是任务 ID，也不携带路径、token 或模型诊断信息；客户端不应自行猜测或拼接它。
 
 ## 核心组件
 
@@ -21,9 +37,11 @@
 sequenceDiagram
     Client->>Server: WebSocket 连接请求
     Server->>Server: 创建 connection_id
-    Server->>Client: connected 消息（包含 connection_id）
+    Server->>Client: connected 消息（包含 connection_id + capabilities）
     Note over Client,Server: 连接建立成功
 ```
+
+`connected.data` 至少包含 `connection_id`、`message`、`server_time`、`capabilities`；其中 `capabilities` 与 HTTP `/capabilities` 完全相同。
 
 **关键代码位置**：
 - Server: `websocket_handler.py:25-46` (handle_connection)
@@ -51,7 +69,7 @@ sequenceDiagram
 
 #### 2.1 ASR 引擎选择 (`engine` 字段)
 
-`upload_request` 可携带可选字段 `engine`,取值 `"funasr"` 或 `"qwen3"`:
+`upload_request` 可携带可选字段 `engine`,取值 `"funasr"` 或 `"qwen3"`；实际是否可用以 `/capabilities` 的 `engine` 为准:
 
 ```json
 {
@@ -71,7 +89,17 @@ sequenceDiagram
 
 **引擎能力**:
 - `funasr`: 生产稳定路径, MPS GPU 加速, 支持说话人识别
-- `qwen3`: 通过多 worker pool 接入 (`src/core/qwen3_pool_transcriber.py`), 长音频质量优, Mac 上 frontend 走 ANE 加速; 详见 `CLAUDE.md` ASR 引擎章节
+- `qwen3`: Linux CUDA 支持路径（也可在 Mac 按需切换），通过 runtime-aware pool 接入；详见 `CLAUDE.md` ASR 引擎章节
+
+#### 2.2 术语 `terms`（单文件与分片共用）
+
+`upload_request.data.terms` 为可选字符串数组。它是唯一客户端可传的术语输入；不接受任意 prompt 或 `context` 字段。服务端按 NFKC → trim → 折叠连续空白 → 稳定去重（保首次顺序）规范化；空数组/省略字段等价于无术语。
+
+限额是协议的一部分：原始最多 100 项、单项最多 256 字符；规范化后最多 50 项、单项最多 64 字符、生效术语总长度最多 1024。字符串数组触发限额时返回 `type: "error"`、`data.error: "invalid_terms"`，同级 `data.reason` 为 `too_many_raw_items`、`raw_item_too_long`、`too_many_terms`、`term_too_long` 或 `total_too_long`；其他类型错误返回 `upload_error`。原始术语不回显。
+
+FunASR 将生效术语作为 hotword 传给模型；Qwen3 将它们作为服务端控制的 context 输入。两者都在响应 metadata 中以 `terms_count` 回显生效数量，并在实际应用时回显 `context_applied: true`。空 terms 零影响，且可正常使用普通缓存；有一个或多个有效 terms 时绕过普通缓存读取并重新转录。
+
+单文件 authority：术语只在 `upload_request` 校验并绑定任务；`upload_data` 不重复携带。分片 authority：术语只在创建 session 时校验并保存；`upload_chunk` 不得携带或覆盖，`finalize_upload` 只接受原 `task_id`，不得改术语。`queue_full` 后重试 finalize 不重传分片。
 
 ### 3. 文件上传阶段
 
@@ -170,9 +198,9 @@ PENDING（待处理） -> PROCESSING（处理中） -> COMPLETED（完成）
 
 ### 1. 任务队列管理
 
-- 使用 `asyncio.Queue(maxsize=50)` 管理待处理任务，防止内存溢出
-- 配置 `max_concurrent_tasks=8` 控制并发数（基于CPU核心数优化）
-- 配置 `max_queue_size=50` 限制队列最大长度
+- 使用 `asyncio.Queue(maxsize=150)` 管理待处理任务；这是 `config.json` 的显式值，profile/env 可按优先级覆盖
+- 配置 `max_concurrent_tasks=2` 控制 FunASR 并发数；Qwen3 另由 `qwen3_pool_size` 控制
+- 配置 `max_queue_size=150` 限制队列最大长度；队列是准入控制，不是无限缓冲池
 - Worker 线程池并发处理任务
 - 实现排队状态通知和预估等待时间
 
@@ -200,8 +228,8 @@ if not has_pending_tasks:
 - **连接映射**：维护 connection_id -> websocket 映射
 - **任务关联**：维护 task_id -> connection_ids 映射
 - **断线处理**：自动清理断开的连接
-- **连接限制**：最大支持200个并发连接
-- **心跳机制**：30秒间隔心跳检测
+- **连接限制**：默认最大支持100个并发连接（`config.json` 显式值）
+- **心跳机制**：60秒间隔心跳检测
 - **超时控制**：5分钟连接超时
 
 ## 错误处理与重试
@@ -315,8 +343,8 @@ if should_retry and task.retry_count < config.transcription.retry_times:
     "failed_tasks": 2,
     "cancelled_tasks": 0,
     "queue_size": 10,
-    "max_queue_size": 50,
-    "max_concurrent_tasks": 8
+    "max_queue_size": 150,
+    "max_concurrent_tasks": 2
 }
 ```
 
@@ -434,32 +462,17 @@ class MultiProcessClient:
 
 ## 注意事项
 
-1. **心跳机制**：客户端使用 ping/pong 保持连接活跃（30秒间隔）
+1. **心跳机制**：客户端使用 ping/pong 保持连接活跃；服务器配置默认 `heartbeat_interval_seconds=60`
 2. **超时控制**：长时间任务需要合理设置超时（默认5分钟）
 3. **消息大小**：大文件传输需要设置合适的 max_size
-4. **并发限制**：根据服务器配置控制客户端并发数（建议不超过8）
+4. **并发限制**：根据服务器实际配置控制客户端并发数，不复制固定的并发数字
 5. **队列监控**：客户端应监听队列状态，避免在服务器繁忙时过度提交
 6. **资源清理**：及时处理 `task_complete` 和 `task_queued` 消息，释放客户端资源
 7. **错误处理**：正确处理队列满错误，实现客户端重试机制
 
-## 最佳实践配置
+## 当前部署基线
 
-基于16核CPU的推荐配置：
-
-```json
-{
-  "server": {
-    "max_connections": 200,
-    "connection_timeout_seconds": 300,
-    "heartbeat_interval_seconds": 30
-  },
-  "transcription": {
-    "max_concurrent_tasks": 8,
-    "max_queue_size": 50,
-    "queue_status_enabled": true
-  }
-}
-```
+仓库 `config.json` 的显式部署值为 `max_connections=100`、`heartbeat_interval_seconds=60`、`max_concurrent_tasks=2`、`max_queue_size=150`；profile 或环境变量可按配置优先级覆盖。需要调整时修改配置源，不要复制旧的硬编码推荐数字。
 
 ## 性能监控
 
