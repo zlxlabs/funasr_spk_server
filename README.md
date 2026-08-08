@@ -70,7 +70,7 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 
 ### 接入客户端
 
-最小流程：`connect → upload_request → upload_data → 等 task_complete`；批量场景用 `task_status_batch` 异步轮询。完整协议、字段表、Python 示例、输出格式、错误处理见 **[客户端交互指南](docs/使用/客户端交互指南.md)**。
+最小流程：`connect → upload_request → upload_data → 等 task_complete`；批量场景用 `task_status_batch` 异步轮询。协议入口、字段表、Python 基础上传示例、输出格式、错误处理见 **[客户端交互指南](docs/使用/客户端交互指南.md)**；使用 `terms` 时还必须按指南先完成 capabilities/connected 预检。
 
 `upload_request.data.terms` 是可选的结构化术语列表。服务端会规范化并校验；空列表不改变识别行为。有效术语不会读取普通缓存，以免把带术语结果误当成普通结果；响应 metadata 会回显 `terms_count` 与引擎相关的 `context_applied`。FunASR hotword、Qwen3 context、缓存与错误契约见[客户端指南](docs/使用/客户端交互指南.md)和[服务端协议](docs/开发/Server-Client%20交互协议.md)。
 
