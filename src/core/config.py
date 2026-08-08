@@ -146,8 +146,9 @@ class Qwen3Config(BaseModel):
 
     # 词级时间戳 (word_align, MMS-300M CTC-FA): 增量挂 segment.words, 不替换段边界.
     # 见 docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
-    #   - word_align_enabled: 字段默认关; cuda_prod/cuda_dev profile 默认开 (CUDA 仅 +1% RTF),
-    #     Mac profile 保持关 (CPU +17% RTF). 开启会加载 ~1.2GB MMS ONNX + 改 cache key.
+    #   - word_align_enabled: 字段默认关; 四个 profile 均不覆盖该字段, 因此 profile 默认都关.
+    #     需 per-request word_align 或显式 FUNASR_QWEN3_WORD_ALIGN_ENABLED=true 开启.
+    #     开启会加载 ~1.2GB MMS ONNX + 改 cache key (CUDA 约 +1% RTF, Mac CPU 约 +17%).
     #   - word_align_language: ISO 码 (chi/eng/jpn/kor...) 兜底语言, per-request
     #     language 字段优先. 中英混排用 chi (preprocess_text 对 chi 逐字切, 能吃英文).
     #   - word_align_model_path: 本地预下的 MMS ONNX 路径 (download_qwen3_models.sh

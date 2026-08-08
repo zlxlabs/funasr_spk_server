@@ -343,8 +343,8 @@ if should_retry and task.retry_count < config.transcription.retry_times:
     "failed_tasks": 2,
     "cancelled_tasks": 0,
     "queue_size": 10,
-    "max_queue_size": 50,
-    "max_concurrent_tasks": 8
+    "max_queue_size": 150,
+    "max_concurrent_tasks": 2
 }
 ```
 
@@ -462,32 +462,17 @@ class MultiProcessClient:
 
 ## 注意事项
 
-1. **心跳机制**：客户端使用 ping/pong 保持连接活跃（30秒间隔）
+1. **心跳机制**：客户端使用 ping/pong 保持连接活跃；服务器配置默认 `heartbeat_interval_seconds=60`
 2. **超时控制**：长时间任务需要合理设置超时（默认5分钟）
 3. **消息大小**：大文件传输需要设置合适的 max_size
-4. **并发限制**：根据服务器配置控制客户端并发数（建议不超过8）
+4. **并发限制**：根据服务器实际配置控制客户端并发数，不复制固定的并发数字
 5. **队列监控**：客户端应监听队列状态，避免在服务器繁忙时过度提交
 6. **资源清理**：及时处理 `task_complete` 和 `task_queued` 消息，释放客户端资源
 7. **错误处理**：正确处理队列满错误，实现客户端重试机制
 
-## 最佳实践配置
+## 当前部署基线
 
-基于16核CPU的推荐配置：
-
-```json
-{
-  "server": {
-    "max_connections": 200,
-    "connection_timeout_seconds": 300,
-    "heartbeat_interval_seconds": 30
-  },
-  "transcription": {
-    "max_concurrent_tasks": 8,
-    "max_queue_size": 50,
-    "queue_status_enabled": true
-  }
-}
-```
+仓库 `config.json` 的显式部署值为 `max_connections=100`、`heartbeat_interval_seconds=60`、`max_concurrent_tasks=2`、`max_queue_size=150`；profile 或环境变量可按配置优先级覆盖。需要调整时修改配置源，不要复制旧的硬编码推荐数字。
 
 ## 性能监控
 
