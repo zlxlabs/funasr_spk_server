@@ -221,8 +221,7 @@ def process_task(
         if use_pickle:
             publish_pickle_result(result_file, error_data)
         else:
-            with open(result_file, 'w', encoding='utf-8') as f:
-                json.dump(error_data, f, ensure_ascii=False)
+            publish_json_result(result_file, error_data)
 
     finally:
         # 每次任务结束后主动释放加速设备缓存，避免内存占用持续增长

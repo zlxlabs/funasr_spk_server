@@ -127,6 +127,13 @@ class FunASRTranscriber:
         except Exception as e:
             logger.error(f"模型初始化失败: {e}")
             raise Exception(f"模型初始化失败: {e}")
+
+    async def cleanup(self):
+        """清理池模式持有的 worker；显式 initialize 可再次启用实例。"""
+        if self.concurrency_mode != "pool" or self.model_pool is None:
+            return
+        await self.model_pool.cleanup()
+        self.is_initialized = False
     
     async def transcribe(
         self,

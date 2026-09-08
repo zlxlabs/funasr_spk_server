@@ -71,7 +71,7 @@ class FakeWorkerPoller:
                                 "task_id": task_id,
                                 "success": True,
                                 "result": result,
-                                "worker_pid": worker_id * 1000 + 1,
+                                "worker_pid": self.pool.worker_processes[worker_id].pid,
                             }
                         except Exception as e:
                             data = {
@@ -79,7 +79,7 @@ class FakeWorkerPoller:
                                 "success": False,
                                 "error": str(e),
                                 "traceback": "fake-traceback",
-                                "worker_pid": worker_id * 1000 + 1,
+                                "worker_pid": self.pool.worker_processes[worker_id].pid,
                             }
 
                         result_file = task_file.with_suffix(".pkl")
@@ -128,7 +128,7 @@ async def fake_qwen3_pool(tmp_path, monkeypatch):
     for _ in range(pool.pool_size):
         p = MagicMock()
         p.poll.return_value = None  # alive
-        p.pid = 12345
+        p.pid = 12345 + _
         fake_procs.append(p)
     pool.worker_processes = fake_procs
 

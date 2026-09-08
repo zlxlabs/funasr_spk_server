@@ -411,6 +411,7 @@ class TestPoolExtraTaskFields:
         fake_proc = MagicMock()
         fake_proc.poll.return_value = None
         pool.worker_processes = [fake_proc]
+        fake_proc.pid = 4321
 
         # 准备 fake audio
         audio = tmp_path / "x.wav"
@@ -434,7 +435,7 @@ class TestPoolExtraTaskFields:
                     result_file = task_file.with_suffix(".pkl")
                     with open(result_file, "wb") as f:
                         _pickle.dump(
-                            {"task_id": task_data["task_id"], "success": True, "result": "OK"},
+                            {"task_id": task_data["task_id"], "success": True, "result": "OK", "worker_pid": fake_proc.pid},
                             f,
                         )
                     return

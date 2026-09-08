@@ -33,6 +33,7 @@ class FunASRServer:
     
     def __init__(self):
         self.server = None
+        self.transcriber = None
         self.is_running = False
     
     async def start(self):
@@ -47,6 +48,7 @@ class FunASRServer:
             engine_name = config.transcription.default_engine
             logger.info(f"初始化 {engine_name} 引擎...")
             transcriber = resolve_transcriber(None)  # None → 走 default_engine
+            self.transcriber = transcriber
             if hasattr(transcriber, "initialize"):
                 await transcriber.initialize()
             logger.success(f"{engine_name} 引擎初始化完成")
@@ -106,13 +108,20 @@ class FunASRServer:
         logger.info("正在停止服务器...")
         
         self.is_running = False
+
+        # 先停止 WebSocket 新连接，避免任务管理器停止期间继续接纳任务。
+        if self.server:
+            self.server.close()
         
         # 停止任务管理器
         await task_manager.stop()
+
+        # 任务协程已停止后，回收引擎 wrapper 持有的外部 worker
+        if self.transcriber is not None and hasattr(self.transcriber, "cleanup"):
+            await self.transcriber.cleanup()
         
-        # 关闭WebSocket服务器
+        # 等待 WebSocket 连接完成关闭，确保池和任务资源已经回收。
         if self.server:
-            self.server.close()
             await self.server.wait_closed()
         
         # 发送停止通知
