@@ -59,6 +59,10 @@ class Qwen3PoolTranscriber:
         """提前初始化 pool(启动所有 worker subprocess 并加载模型)"""
         await self._pool.initialize()
 
+    async def cleanup(self):
+        """清理 file-based worker pool；显式 initialize 可重新启动它。"""
+        await self._pool.cleanup()
+
     async def transcribe(
         self,
         audio_path: str,

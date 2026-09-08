@@ -124,6 +124,17 @@ class TestProcessTaskJsonMode:
         assert tres.file_hash == "hh"
         assert raw["engine"] == "qwen3"
 
+    def test_success_result_is_published_with_replace(self, tmp_task_dir, write_task_file):
+        from src.core import qwen3_worker_process as wp
+
+        task_file = write_task_file(0, "tid-atomic", "/fake/audio.wav", "json")
+        fake = _make_fake_transcriber()
+        with patch.object(wp.os, "replace", wraps=os.replace) as replace:
+            wp.process_task(0, fake, str(task_file), str(tmp_task_dir))
+        replace.assert_called_once()
+        published = tmp_task_dir / "worker_0_tid-atomic.pkl"
+        assert pickle.loads(published.read_bytes())["task_id"] == "tid-atomic"
+
     def test_deletes_task_file_after_processing(self, tmp_task_dir, write_task_file):
         from src.core import qwen3_worker_process as wp
 

@@ -1,5 +1,7 @@
 """I1-T3 FunASR hotword 参数链与 worker 日志边界。"""
 import json
+import os
+import pickle
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,12 +83,19 @@ async def test_funasr_pool_task_json_keeps_hotword_top_level(tmp_path):
     pool._ensure_workers_alive = AsyncMock()
     pool._calculate_timeout = MagicMock(return_value=1.0)
 
-    with patch("src.core.file_based_process_pool.asyncio.sleep", side_effect=RuntimeError("stop")), \
+    captured = {}
+    original_write_task_json = pool._write_task_json
+
+    def capture_task_json(task_file, payload):
+        original_write_task_json(task_file, payload)
+        captured["bytes"] = task_file.read_bytes()
+
+    with patch.object(pool, "_write_task_json", side_effect=capture_task_json), \
+         patch("src.core.file_based_process_pool.asyncio.sleep", side_effect=RuntimeError("stop")), \
          pytest.raises(RuntimeError, match="stop"):
         await pool.generate_with_pool(str(audio), hotword="Alpha Beta")
 
-    task_file = next(task_dir.glob("*.task"))
-    payload = json.loads(task_file.read_text(encoding="utf-8"))
+    payload = json.loads(captured["bytes"])
     assert payload["hotword"] == "Alpha Beta"
     assert "options" not in payload
 
@@ -111,3 +120,60 @@ def test_funasr_worker_passes_hotword_and_redacts_log(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Alpha Beta" not in output
     assert "hotword_length=10" in output
+
+
+def test_funasr_worker_publishes_result_with_replace(tmp_path):
+    from src.core import worker_process as wp
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    task_file = tmp_path / "worker_0-atomic.task"
+    task_file.write_text(json.dumps({
+        "task_id": "atomic", "audio_path": str(audio), "source_audio_path": str(audio),
+        "batch_size_s": 300, "hotword": "", "use_pickle": True,
+    }), encoding="utf-8")
+    model = MagicMock()
+    model.generate.return_value = [{"ok": True}]
+
+    with patch.object(wp, "release_accelerator_memory"), \
+         patch.object(wp.os, "replace", wraps=os.replace) as replace:
+        wp.process_task(0, model, str(task_file), str(tmp_path))
+
+    replace.assert_called_once()
+    result_file = tmp_path / "worker_0-atomic.pkl"
+    with result_file.open("rb") as handle:
+        assert pickle.load(handle)["task_id"] == "atomic"
+
+
+def test_funasr_worker_publishes_json_error_atomically(tmp_path):
+    from src.core import worker_process as wp
+    from src.core.atomic_result_publish import publish_json_result as publish_json
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    task_file = tmp_path / "worker_0-json-error.task"
+    task_file.write_text(json.dumps({
+        "task_id": "json-error", "audio_path": str(audio),
+        "source_audio_path": str(audio), "batch_size_s": 300,
+        "hotword": "", "use_pickle": False,
+    }), encoding="utf-8")
+    model = MagicMock()
+    model.generate.side_effect = RuntimeError("json failure")
+    observed = {}
+
+    def publish_error(result_path, payload):
+        result_path = os.fspath(result_path)
+        assert not os.path.exists(result_path)
+        observed["payload"] = payload
+        publish_json(result_path, payload)
+
+    with patch.object(wp, "release_accelerator_memory"), \
+         patch.object(wp, "publish_json_result", side_effect=publish_error):
+        wp.process_task(0, model, str(task_file), str(tmp_path))
+
+    result_file = tmp_path / "worker_0-json-error.result"
+    assert result_file.exists()
+    payload = json.loads(result_file.read_text(encoding="utf-8"))
+    assert payload["task_id"] == "json-error"
+    assert payload["worker_pid"] == os.getpid()
+    assert observed["payload"]["task_id"] == "json-error"
