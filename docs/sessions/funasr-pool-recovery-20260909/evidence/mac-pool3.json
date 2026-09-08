@@ -1,0 +1,88 @@
+{
+  "candidate_head": "54cd1f69cc7e0f04d884a171a4ac31514c5b7f1f",
+  "candidate_root": "/Users/zhanglixing/Production/funasr_spk_server-candidate-54cd1f6-20260909",
+  "server": {
+    "pid": 39513, "pool_size": 3,
+    "initial_worker_pids": [39560,39561,39562],
+    "replacement_worker_pids": [42671,46077],
+    "all_recorded_pids_exited": true,
+    "log": "verification-state-pool3/server.stdout.log"
+  },
+  "long_websocket": {
+    "client_task_id": "1e85ca9e-ce34-4db5-95f7-1c59e50ddcc3",
+    "pool_task_id": "9b409105-4dee-4d8b-950b-87dd8459885b",
+    "worker_slot": 0,
+    "worker_pid": 39560,
+    "source": "temp/samples/4-person-example.m4a",
+    "duration_sec": 2216.16,
+    "processing_sec": 139.697,
+    "result_bytes": 68930,
+    "segments": 202,
+    "speakers": 4,
+    "result_file_sha256": "7f41842a3486ca2df1984778d012202147c7cee8eac5f4214015f55d64f87c93",
+    "transcription_result_sha256": "f8c00f8c5d9ef35256985bb1c937b3b098c74adb25828fc7f7e14ad8873c3fc",
+    "cached": false,
+    "force_refresh": true
+  },
+  "short_websocket_directory_probe": {
+    "client_task_id": "0206a512-7e1a-436e-b422-422bff62193c",
+    "pool_task_id": "c4cd6a4a-3bc8-4978-8fda-edee343918b0",
+    "worker_slot": 1,
+    "worker_pid": 39561,
+    "captured_at": "2026-09-09T02:04:45+08:00",
+    "popen_dirhelper_suffix": "funasr-worker-39513-1-5e16f1bd",
+    "private_dirs_during_run": {
+      "user": "/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/0/funasr-worker-39513-1-5e16f1bd",
+      "temp": "/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/T/funasr-worker-39513-1-5e16f1bd",
+      "cache": "/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/C/funasr-worker-39513-1-5e16f1bd"
+    },
+    "private_dirs_mode_during_run": "0700",
+    "mpsgraph_path_during_run": "/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/T/funasr-worker-39513-1-5e16f1bd/com.apple.MetalPerformanceShadersGraph/mpsgraph-39561-2026-09-09_02_04_45-4121388666",
+    "mpsgraph_pid_matches_worker": true,
+    "long_task_mpsgraph_captured": false,
+    "duration_sec": 60.0,
+    "processing_sec": 15.116,
+    "segments": 17,
+    "speakers": 6
+  },
+  "cleanup": {
+    "server_and_workers_exited": true,
+    "candidate_pool_run_dir": "temp/tasks/run-dbb250a958f2406d9e41147629904396",
+    "candidate_pool_run_dir_entries_after": 0,
+    "candidate3_temp_entries_after": 0,
+    "private_worker_dirs_after": 0,
+    "baseline_test_pids": [62042, 62043],
+    "baseline_test_processes_exited": true,
+    "shared_mps": {
+      "path": "/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/T/com.apple.MetalPerformanceShadersGraph",
+      "sentinel": "mpsgraph-52376-2026-06-16_13_03_51-561898693",
+      "sample_size_before": 64,
+      "sample_size_after": 64,
+      "sentinel_exists_after": true,
+      "changed_or_deleted": false,
+      "valid_json": true,
+      "invalid_backup_preserved": "verification-state-pool3/shared-mps-comparison.invalid.json"
+    }
+  },
+  "integration": {
+    "candidate_full": "5 failed, 18 passed, 6 skipped, 13 errors in 329.22s",
+    "funasr_parity_passed": 3,
+    "smoke_engine_wiring_passed": 6,
+    "new_golden_generated": false,
+    "baseline_head": "43e8e949d8a860cdc9ab0b58e50a20f279d90861", "baseline_selected_18": "5 failed, 13 errors in 123.67s",
+    "baseline_failure_nodeids_identical": true,
+    "baseline_nodeids": ["test_diarize_ort_parity.py::test_diarize_dispatched_routes_consistently", "test_qwen3_frontend_ane_parity.py::TestFrontendAneParity::test_asr_text_matches_cpu_baseline", "test_qwen3_word_align_e2e.py::test_word_align_off_segments_have_no_words", "test_qwen3_word_align_e2e.py::test_word_align_fallback_on_align_error", "test_qwen3_word_align_e2e.py::test_word_align_real_mms_produces_words", "test_qwen3_diarize_e2e.py::TestQwen3DiarizeEndToEnd::test_podcast_2speakers_json_mode", "test_qwen3_diarize_e2e.py::TestQwen3DiarizeEndToEnd::test_podcast_2speakers_srt_mode", "test_qwen3_multispeaker_pipeline.py::TestMultispeakerPipeline::test_single_speaker_detected", "test_qwen3_multispeaker_pipeline.py::TestMultispeakerPipeline::test_two_speakers_detected", "test_qwen3_multispeaker_pipeline.py::TestMultispeakerPipeline::test_four_speakers_detected_from_eval_set", "test_qwen3_pool_real_concurrency.py::TestRealConcurrencyNoCrosstalk::test_two_parallel_tasks_no_crosstalk", "test_qwen3_pool_real_concurrency.py::TestRealConcurrencyHasSpeedup::test_parallel_has_some_speedup", "test_qwen3_pool_real_concurrency.py::TestPoolSizeMatchesWorkerCount::test_worker_process_count_matches_pool_size", "test_qwen3_pool_real_concurrency.py::TestTotalRssUnderBudget::test_total_worker_rss_under_8gb", "test_qwen3_server_websocket_e2e.py::TestRealServerWebSocketE2E::test_single_client_full_chunked_upload", "test_qwen3_server_websocket_e2e.py::TestRealServerWebSocketE2E::test_concurrent_different_hash_no_crosstalk", "test_qwen3_server_websocket_e2e.py::TestRealServerWebSocketE2E::test_cache_hit_on_second_request_same_hash", "test_qwen3_spk_overdetect_fix.py::TestSpkOverDetectFix::test_2spk_60min_mp3_no_over_detect"],
+    "baseline_missing_dependencies": ["sherpa_onnx", "gguf"],
+    "qwen3_limit": "候选与基线生产 venv 均缺 sherpa_onnx/gguf，Qwen3/diarize/word-align 真实行为未验证；未安装依赖。"
+  },
+  "golden_sha256": {
+    "tests/fixtures/golden/podcast_2speakers_60s.golden.json": "6f441d1aed54d782e441d03d1e6e78ff949d3ef49e75de79157e1e2ade538ba2",
+    "tests/fixtures/golden/silence_5s.golden.json": "1d8a2f46499508c64472035b2da14588968bd40abd0e1bc093d17fa7b58e7ba2",
+    "tests/fixtures/golden/tts_1speaker_5s.golden.json": "64896ed50b9b06e0b00844e8b6eb2b00be7bffaf9bcba9055299f1ad97c763fc"
+  },
+  "ledger": {
+    "r1_docs_import_commit": "69e9021",
+    "p1_zero_source_commit": "219832cbef460b74fa3606df5e839bd674b9a4c0",
+    "p1_zero": 0
+  }
+}
