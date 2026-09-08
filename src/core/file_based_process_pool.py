@@ -23,6 +23,8 @@ from src.core.config import config as global_config
 _DARWIN_USER_DIR_CONFSTR = 65536
 _DARWIN_USER_TEMP_DIR_CONFSTR = 65537
 _DARWIN_USER_CACHE_DIR_CONFSTR = 65538
+
+
 @dataclass
 class _TaskLease:
     """一次 pool 调用拥有的 task/audio/result 与 process 归属。"""
@@ -33,6 +35,8 @@ class _TaskLease:
     task_file: Path
     result_file: Path
     audio_file: Path
+
+
 class FileBasedProcessPool:
     """
     基于文件系统的进程池管理器
@@ -110,6 +114,7 @@ class FileBasedProcessPool:
             states.append(f"{idx}[pid={pid},{status}]")
         if states:
             logger.info(f"{context} | 工作进程状态: {', '.join(states)}")
+
     def _ensure_capacity(self, worker_id: int) -> None:
         """确保 worker 列表扩容到指定索引"""
         needed = worker_id + 1
@@ -138,6 +143,7 @@ class FileBasedProcessPool:
             raise
         environment["DIRHELPER_USER_DIR_SUFFIX"] = suffix
         return environment, tuple(private_dirs)
+
     async def _reap_worker_process(self, process: subprocess.Popen, force: bool = False) -> None:
         """等待 worker 退出；必要时严格执行 terminate→wait→kill→wait。"""
         loop = asyncio.get_event_loop()
@@ -161,6 +167,7 @@ class FileBasedProcessPool:
             except subprocess.TimeoutExpired:
                 process.kill()
                 await loop.run_in_executor(None, process.wait, 5)
+
     def _remove_owned_paths(self, paths: Tuple[Path, ...]) -> None:
         """只删除当前 lease 明确创建的文件和 Darwin 私有目录。"""
         for path in paths:
@@ -174,11 +181,13 @@ class FileBasedProcessPool:
         if log_file is not None:
             log_file.close()
             process._worker_log_file = None
+
     def _worker_private_dirs_for_process(
         self, process: subprocess.Popen
     ) -> Tuple[Path, ...]:
         """读取 Popen 保存的 Darwin 私有目录归属，避免 pool 状态重复同步。"""
         return getattr(process, "_worker_private_dirs", ())
+
     def _launch_worker_process(self, worker_id: int) -> subprocess.Popen:
         """在当前事件循环内同步启动进程"""
         cmd = [
@@ -235,12 +244,14 @@ class FileBasedProcessPool:
             self._remove_owned_paths(private_dirs)
             log_file.close()
             raise
+
         # 将文件对象保存到进程对象中，以便后续关闭
         process._worker_log_file = log_file
         process._worker_private_dirs = private_dirs
 
         logger.debug(f"工作进程 {worker_id} 日志输出到: {worker_log}")
         return process
+
     async def _wait_for_worker_ready(
         self,
         worker_id: int,
@@ -266,6 +277,7 @@ class FileBasedProcessPool:
             await asyncio.sleep(0.5)
 
         raise TimeoutError(f"工作进程 {worker_id} 在 {timeout} 秒内未写入就绪标记")
+
     async def _spawn_worker(self, worker_id: int) -> None:
         """创建 worker；同一 slot 的并发调用只等待同一个 process。"""
         async with self._management_lock:
@@ -303,7 +315,9 @@ class FileBasedProcessPool:
                 raise
             finally:
                 self._worker_starting.discard(worker_id)
+
         logger.info(f"工作进程 {worker_id} 已启动 (PID: {process.pid})")
+
     async def _replenish_worker(self, worker_id: int) -> None:
         """后台补齐正常完成后退役的 worker，不阻塞已交付结果。"""
         try:
@@ -316,6 +330,7 @@ class FileBasedProcessPool:
             current_task = asyncio.current_task()
             if self._worker_replenish_tasks.get(worker_id) is current_task:
                 self._worker_replenish_tasks.pop(worker_id, None)
+
     def _schedule_worker_replenish(self, worker_id: int) -> None:
         """登记单个 slot 的后台补齐任务，避免结果交付等待模型 ready。"""
         if not self.is_initialized or self._shutdown_requested:
@@ -326,6 +341,7 @@ class FileBasedProcessPool:
         self._worker_replenish_tasks[worker_id] = asyncio.create_task(
             self._replenish_worker(worker_id)
         )
+
     # ------------------------------------------------------------------
     # 巡检任务
     # ------------------------------------------------------------------
@@ -393,6 +409,7 @@ class FileBasedProcessPool:
             self._run_task_dir = self._task_root_dir / f"run-{uuid.uuid4().hex}"
             self._run_task_dir.mkdir(mode=0o700)
             self.task_dir = self._run_task_dir
+
         spawn_tasks: List[asyncio.Task] = []
         try:
             spawn_tasks = [
@@ -439,6 +456,8 @@ class FileBasedProcessPool:
                 logger.warning(f"检测到工作进程 {worker_id} 不可用，尝试重启")
                 missing_worker_ids.append(worker_id)
 
+        # 每个 spawn 只在 management lock 内做短暂的进程创建，ready 等待在锁外；
+        # 并行补齐避免一批任务完成后逐个重新加载模型。
         if missing_worker_ids:
             spawn_results = await asyncio.gather(
                 *(self._spawn_worker(worker_id) for worker_id in missing_worker_ids),
@@ -448,6 +467,7 @@ class FileBasedProcessPool:
                 if isinstance(spawn_result, BaseException):
                     raise spawn_result
         self._log_worker_states("巡检后")
+
     async def _acquire_worker_lease(
         self, task_id: str, task_file: Path, result_file: Path, audio_file: Path
     ) -> _TaskLease:
@@ -478,6 +498,7 @@ class FileBasedProcessPool:
                     return lease
             await self._ensure_workers_alive()
             await asyncio.sleep(0.01)
+
     async def _release_worker_lease(
         self, lease: _TaskLease, force: bool, replenish: bool = False
     ) -> None:
@@ -492,6 +513,8 @@ class FileBasedProcessPool:
                 )
                 self._worker_releasing[lease.worker_id] = release_task
 
+        # generate cancellation must not cancel the shared retirement operation;
+        # cleanup may be waiting on the same task and must receive its exception.
         await asyncio.shield(release_task)
 
     async def _finish_worker_lease_release(
@@ -500,6 +523,7 @@ class FileBasedProcessPool:
         """回收 lease 拥有的 process 与文件，失败时保留归属供 cleanup 重试。"""
         current_task = asyncio.current_task()
         try:
+            # reap 可能等待 terminate/kill，不能占住全池管理锁阻塞其他 slot。
             await self._reap_worker_process(lease.process, force=force)
             self._remove_owned_paths(
                 (
@@ -751,6 +775,7 @@ class FileBasedProcessPool:
         if startup_tasks or replenish_tasks:
             await asyncio.gather(*startup_tasks, *replenish_tasks, return_exceptions=True)
 
+        # Each lease operation is an awaitable carrying its own reap/cleanup error.
         release_operations = [
             self._release_worker_lease(lease, force=True) for lease in leases
         ]
@@ -776,6 +801,7 @@ class FileBasedProcessPool:
             run_task_dir = self._run_task_dir
 
         if run_task_dir is not None:
+            # 生命周期目录由本池以唯一名称创建；所有 process 已 wait 后才整体删除。
             shutil.rmtree(run_task_dir)
 
         async with self._management_lock:
