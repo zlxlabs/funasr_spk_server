@@ -20,7 +20,7 @@
     "segments": 202,
     "speakers": 4,
     "result_file_sha256": "7f41842a3486ca2df1984778d012202147c7cee8eac5f4214015f55d64f87c93",
-    "transcription_result_sha256": "f8c00f8c5d9ef35256985bb1c937b3b098c74adb25828fc7f7e14ad8873c3fc",
+    "transcription_result_sha256": "f8c00f8c5d9ef35256985bb1c937b3b098c74adb25828fc7f7e14ad8873c3fc2",
     "cached": false,
     "force_refresh": true
   },
