@@ -34,6 +34,7 @@ if str(project_root) not in sys.path:
 os.environ["FUNASR_WORKER_MODE"] = "1"
 
 from src.core.qwen3_transcriber import get_qwen3_transcriber  # noqa: E402
+from src.core.atomic_result_publish import publish_pickle_result, publish_text_marker  # noqa: E402
 
 
 def load_qwen3_transcriber():
@@ -130,8 +131,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
             "worker_pid": os.getpid(),
         }
 
-        with open(result_file, "wb") as f:
-            pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        publish_pickle_result(result_file, result_data)
 
         print(f"[Qwen3-Worker-{os.getpid()}] 任务 {task_id} 完成, 结果写入 {os.path.basename(result_file)}")
 
@@ -149,8 +149,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
             "worker_pid": os.getpid(),
             "audio_path": original_audio_path,
         }
-        with open(result_file, "wb") as f:
-            pickle.dump(error_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        publish_pickle_result(result_file, error_data)
 
     finally:
         # 删除 .task 文件 (与 FunASR worker 一致, 表示任务已处理)
@@ -183,8 +182,7 @@ def worker_loop(worker_id: int, task_dir: str) -> None:
 
     # 写 ready 文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")
-    with open(ready_file, "w") as f:
-        f.write(str(os.getpid()))
+    publish_text_marker(ready_file, str(os.getpid()))
 
     print(f"[Qwen3-Worker-{worker_id}] ========== 就绪, 等待任务 ==========")
 

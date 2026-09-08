@@ -29,6 +29,8 @@ from funasr import AutoModel
 # 导入设备管理器和全局配置
 from src.core.device_manager import DeviceManager
 from src.core.config import config as global_config
+from src.core.atomic_result_publish import publish_json_result, publish_pickle_result
+from src.core.atomic_result_publish import publish_text_marker
 
 
 def setup_device() -> str:
@@ -175,19 +177,9 @@ def process_task(
 
         if use_pickle:
             # 使用pickle保存（支持大型对象）
-            with open(result_file, 'wb') as f:
-                pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            publish_pickle_result(result_file, result_data)
         else:
-            # 使用JSON保存（兼容性更好，但可能失败于大型结果）
-            try:
-                with open(result_file, 'w', encoding='utf-8') as f:
-                    json.dump(result_data, f, ensure_ascii=False, separators=(',', ':'))
-            except Exception as json_error:
-                print(f"[Worker-{os.getpid()}] JSON保存失败，改用pickle: {json_error}")
-                # 降级到pickle
-                result_file = task_file.replace('.task', '.pkl')
-                with open(result_file, 'wb') as f:
-                    pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            publish_json_result(result_file, result_data)
 
         print(f"[Worker-{os.getpid()}] ✓ 任务 {task_id} 完成")
 
@@ -227,8 +219,7 @@ def process_task(
         }
 
         if use_pickle:
-            with open(result_file, 'wb') as f:
-                pickle.dump(error_data, f)
+            publish_pickle_result(result_file, error_data)
         else:
             with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(error_data, f, ensure_ascii=False)
@@ -294,8 +285,7 @@ def worker_loop(worker_id: int, task_dir: str):
 
     # 创建就绪标记文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")
-    with open(ready_file, 'w') as f:
-        f.write(str(os.getpid()))
+    publish_text_marker(ready_file, str(os.getpid()))
 
     print(f"[Worker-{worker_id}] ========== 就绪，等待任务 ==========")
     
