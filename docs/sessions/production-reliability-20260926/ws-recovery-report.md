@@ -51,6 +51,7 @@ tests/unit/test_qwen3_encoder_provider.py::TestExistingBranchesUnchanged::test_d
 ## 最终验证与审查
 
 - Linux 最新定向结果：上述四个 WebSocket/task status 测试文件 **40 passed**。Mac 冻结组合为 A `4e49d35` + B `e602f79`；Mac 上恢复与诊断两个测试文件 **17 passed, 1 warning in 0.58s**，日志见主脑白名单回读的 `/tmp/funasr-result-contract-4e49d35/logs/B-targeted-unit.log`。
-- Mac 组合验证中，真实 FunASR 服务子进程的 JSON、SRT、缓存命中 3 项，以及 3 项模型 parity 测试通过。完整 integration 套件整体未全绿：仍有 Qwen 环境失败和额外临时探针失败；主脑按 A 正基线归因核对，未把这些失败隐去或表述为全套通过。
+- Mac 组合验证中，真实 FunASR 服务子进程的 JSON、SRT、缓存命中 3 项，以及 3 项模型 parity 测试通过。Mac 原仓 integration 42 项为 18 passed、7 skipped、4 failed、13 errors；17 个 Qwen 失败节点与基线 `ec0b892` 同环境的 17/17 完全一致，基线为 4 failed、13 errors（123.53s）。
+- 首次合并运行 43 项时额外有 1 个临时 probe 失败：之前的 Qwen 测试更改全局 engine，导致 `resolve_funasr` 拒绝；该 probe 单独与 3 个 golden 测试运行共 4 passed，确认是测试间状态污染，不是业务改动。
 - Linux 全量 unit 的 11 个失败/错误节点与 base、A H0 保存的基线节点集合逐项一致；这只说明已测失败子集匹配基线，不代表全量 unit 全绿。独立静态审查结论为 P1/P2/P3 均 0；R2 运行时审查结论为 `failure-visibility: clean`，审查证据分别见 `reviews/B-r1-verdict.md` 与 `reviews/B-r2-verdict.md`。
 - Mac 真实服务 E2E 没有断线步骤，断线恢复用例仍使用 fake TaskManager 和模拟模型结果；两类证据不能合并成真实生产 worker 断线后持续执行已验证。本仓没有 GitHub Actions workflow，也未部署或操作生产。
