@@ -3,7 +3,7 @@
 > 任务类型: **严格 TDD 修复** — 不再做调研, 调研结论已锁定
 > 预估 session: 1-2 次, 6-8 个 commit
 > 工作模式: **中途非必要不要停下来询问, 跑通直到 DoD 全满足**
-> 工作目录: `/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
+> 工作目录: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
 > 起点分支: `spike/qwen3-diarize-poc` HEAD `92e8442` (3 commit ahead origin 已 push)
 > 修复 PR 切新分支: `fix/qwen3-spk-overdetect`
 
@@ -68,7 +68,7 @@
 ### 步骤 0: 切分支 + 跑现有 baseline (不改代码, 0 commit)
 
 ```bash
-cd /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server
+cd ~/Dev/projects/250729_funasr_spk_server/funasr_spk_server
 git checkout -b fix/qwen3-spk-overdetect spike/qwen3-diarize-poc
 venv/bin/python -m pytest tests/unit/test_qwen3_spk_overdetect_repro.py -v
 # 期望: 1 xfailed (test_filter...over_detect) + 1 passed (test_filter...clean_path_passes)
@@ -269,8 +269,8 @@ cat > /tmp/eval_set_n1_verify.py <<'PY'
 """N=1 单跑 eval_set 4 个 audio, 验证 spk 数."""
 import asyncio, sys
 from pathlib import Path
-sys.path.insert(0, '/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server')
-import os; os.chdir('/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server')
+sys.path.insert(0, '~/Dev/projects/250729_funasr_spk_server/funasr_spk_server')
+import os; os.chdir('~/Dev/projects/250729_funasr_spk_server/funasr_spk_server')
 
 from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
 

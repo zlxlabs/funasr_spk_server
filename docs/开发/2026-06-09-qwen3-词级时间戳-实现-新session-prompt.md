@@ -81,7 +81,7 @@ word_ts = postprocess_results(text_starred, spans, stride, scores)  # [{text,sta
 - 更新 `CLAUDE.md` 的「Qwen3 后处理 pipeline」一节:加 word_align 层说明(挂在 silence_align 后、relabel 前;flag + env;逐 window fallback)。
 - 更新 PoC 计划文档落地状态(标已实现)+ SUMMARY。
 - diarize 开关议题现在可塌缩成纯布尔(时间戳恒有基线)—— 若要顺手做,见 `docs/开发/2026-06-09-qwen3-diarize开关API-设计讨论-新session-prompt.md`。
-- CUDA provider 要在 3060 实测(`ssh zlx@100.103.92.95`,记忆 `reference_cuda_box`):MMS ONNX 用 CUDAExecutionProvider + 跟 llama.cpp CUDA 共存验证。
+- CUDA provider 要在 3060 实测(`ssh <user>@<dev-host>`,记忆 `reference_cuda_box`):MMS ONNX 用 CUDAExecutionProvider + 跟 llama.cpp CUDA 共存验证。
 
 ## 相关记忆 / 文档
 - 记忆:`project_word_timestamp_multilang`(多语种 + 最终决策)、`reference_qwen3_aligner_weights`(Qwen aligner 权重,本任务不用但留底)、`feedback_tdd_strict`、`feedback_no_pr_workflow`、`reference_cuda_box`。

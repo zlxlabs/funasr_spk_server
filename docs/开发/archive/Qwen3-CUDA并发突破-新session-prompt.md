@@ -35,7 +35,7 @@
 
 | 项 | 值 |
 |---|---|
-| dev 机器 | `ssh zlx@100.103.92.95` (Tailscale), RTX 3060 12G, Ubuntu 24.04, **8 vCPU** |
+| dev 机器 | `ssh <user>@<dev-host>` (Tailscale), RTX 3060 12G, Ubuntu 24.04, **8 vCPU** |
 | 工作目录 | `~/Dev/projects/funasr_spk_server` (远端) |
 | venv | `venv/` (已装 onnxruntime-gpu 1.26 + sherpa-onnx 1.13.2+cuda12.cudnn9 + tensorrt-cu12 10.9) |
 | LD_LIBRARY_PATH | 见 `scripts/_remote_run_provider.sh` 头部 |
@@ -149,15 +149,15 @@ sherpa CPU backend 跟 LLM CUDA 共存 OK (production 在用), pool=2 跑 8 vCPU
 ```bash
 # 同步本地改动到远端
 rsync -av --exclude=venv --exclude=models --exclude=temp --exclude='__pycache__' \
-  src/ scripts/ tests/ docs/ zlx@100.103.92.95:/home/zlx/Dev/projects/funasr_spk_server/
+  src/ scripts/ tests/ docs/ <user>@<dev-host>:~/Dev/projects/funasr_spk_server/
 
 # 远端跑命令 (LD_LIBRARY_PATH 必须 export, 不然 ORT silent fallback CPU)
-ssh zlx@100.103.92.95 'bash -lc "cd /home/zlx/Dev/projects/funasr_spk_server && \
+ssh <user>@<dev-host> 'bash -lc "cd ~/Dev/projects/funasr_spk_server && \
   source venv/bin/activate && \
   bash scripts/_remote_concurrent_probe.sh"'
 
 # 远端长跑用 nohup + 输出文件, SSH pipe 会 buffer stdout
-ssh zlx@100.103.92.95 'cd ~/Dev/projects/funasr_spk_server && \
+ssh <user>@<dev-host> 'cd ~/Dev/projects/funasr_spk_server && \
   nohup bash scripts/_remote_xxx.sh > /tmp/xxx.log 2>&1 &'
 # 然后从本地 ssh tail /tmp/xxx.log 看进度
 ```
@@ -168,7 +168,7 @@ ssh zlx@100.103.92.95 'cd ~/Dev/projects/funasr_spk_server && \
 
 ```bash
 # 远端确认 MPS daemon 二进制存在 + driver 支持
-ssh zlx@100.103.92.95 'which nvidia-cuda-mps-control && nvidia-cuda-mps-control -d && pgrep -f mps'
+ssh <user>@<dev-host> 'which nvidia-cuda-mps-control && nvidia-cuda-mps-control -d && pgrep -f mps'
 ```
 
 如果 daemon 起得来:

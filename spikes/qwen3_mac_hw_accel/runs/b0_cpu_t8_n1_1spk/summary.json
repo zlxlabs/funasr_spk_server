@@ -10,7 +10,7 @@
     "1spk-16min": {
       "meta": {
         "label": "1spk-16min",
-        "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
+        "audio_path": "~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
         "wall": 156.9510924999995,
         "duration": 970.176,
         "rtf": 0.16177589684758178,

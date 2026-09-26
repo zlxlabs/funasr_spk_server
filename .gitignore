@@ -90,3 +90,7 @@ config.prod.json
 *.bak
 *.cache
 
+
+# 验收台账不随仓分发（含派单 ID 与本机绝对路径）
+retro/acceptance-log.jsonl
+retro/*.lock

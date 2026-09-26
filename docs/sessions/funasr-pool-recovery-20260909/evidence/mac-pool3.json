@@ -1,6 +1,6 @@
 {
   "candidate_head": "54cd1f69cc7e0f04d884a171a4ac31514c5b7f1f",
-  "candidate_root": "/Users/zhanglixing/Production/funasr_spk_server-candidate-54cd1f6-20260909",
+  "candidate_root": "~/Production/funasr_spk_server-candidate-54cd1f6-20260909",
   "server": {
     "pid": 39513, "pool_size": 3,
     "initial_worker_pids": [39560,39561,39562],

@@ -21,8 +21,8 @@ async def test_progress_update():
     """测试进度更新功能"""
     server_url = "ws://localhost:8767"
     
-    # 准备测试音频文件路径
-    audio_file = r"D:\MyFolders\Developments\0GithubProjectsTest\250728_funasr\funasr_spk_server\tests\test_data\test_audio_60s.wav"
+    # 准备测试音频文件路径（相对本目录推导，不写死某台机器的绝对路径）
+    audio_file = str(Path(__file__).parent.parent / "test_data" / "test_audio_60s.wav")
     
     if not Path(audio_file).exists():
         logger.error(f"测试音频文件不存在: {audio_file}")

@@ -13,6 +13,6 @@
 - 既有 `docs/开发/2026-06-16-任务系统设计与异步规划-新session交接.md:43-45,69` 明示状态易失、重启丢失在途/排队任务；`docs/开发/2026-06-16-异步轮询契约-设计定案与落地计划.md:137` 同样写明“重启（队列/在途全丢）”。不能把既有且明确的重启语义算成本批新引入的永久泄漏。
 - base `src/main.py:109-116` 已在关闭 WebSocket 前停止 TaskManager；H0 仅提前发出 close 并新增池回收，没有新引入这个上传窗口。
 - 本批 design 的准入不变式落在 `pool.generate/cleanup`：cleanup 后不复活池、旧 PID reap 后才清资源。它没有声明重启保留任务或用户 API cancel 立即终止子进程。
-- 真实 Mac 消费环境核验：生产 PM2 cwd 为 `/Users/zhanglixing/Production/funasr_spk_server`，入口 `run_server.py`，解释器为该仓 `venv/bin/python`，websockets 12.0，kill_timeout 10000ms。
+- 真实 Mac 消费环境核验：生产 PM2 cwd 为 `~/Production/funasr_spk_server`，入口 `run_server.py`，解释器为该仓 `venv/bin/python`，websockets 12.0，kill_timeout 10000ms。
 
 本轮确认新增 P1 为 0。后续仍需另一角度的独立审查以及 Mac 候选版本集成、真实长音频和资源清理证据，不能只凭本分诊宣布交付完成。
