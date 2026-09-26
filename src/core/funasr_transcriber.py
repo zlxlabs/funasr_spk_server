@@ -177,7 +177,7 @@ class FunASRTranscriber:
                 logger.error(f"音频时长过短: {duration}秒，无法进行转录")
                 raise Exception("音频时长过短，至少需要0.5秒的音频")
             
-            logger.info(f"开始转录: {os.path.basename(audio_path)}")
+            logger.info(f"[{task_id}] 开始转录")
             
             # 使用与测试脚本完全相同的转录参数
             # 在线程池中运行同步的 model.generate，避免阻塞事件循环
@@ -224,7 +224,7 @@ class FunASRTranscriber:
             try:
                 if self.concurrency_mode == "pool":
                     # 使用模型池进行推理
-                    logger.debug(f"使用模型池处理: {os.path.basename(audio_path)}")
+                    logger.debug(f"[{task_id}] 使用模型池处理")
                     result = await self.model_pool.generate_with_pool(
                         audio_path=audio_path,
                         batch_size_s=self.config["funasr"]["batch_size_s"],
@@ -235,13 +235,13 @@ class FunASRTranscriber:
                     # Python版本的FunASR VAD不支持并发，需要序列化访问
                     def _generate_with_lock():
                         with self._model_lock:
-                            logger.debug(f"获取模型锁，开始处理: {os.path.basename(audio_path)}")
+                            logger.debug(f"[{task_id}] 获取模型锁，开始处理")
                             result = self.model.generate(
                                 input=audio_path,  # 直接使用原始音频文件
                                 batch_size_s=self.config["funasr"]["batch_size_s"],
                                 hotword=hotword
                             )
-                            logger.debug(f"释放模型锁，处理完成: {os.path.basename(audio_path)}")
+                            logger.debug(f"[{task_id}] 释放模型锁，处理完成")
                             return result
                     
                     # 在线程池中执行，但使用锁保护
@@ -316,7 +316,7 @@ class FunASRTranscriber:
             # 根据输出格式处理结果
             if output_format == "srt":
                 # SRT格式：不合并说话人，直接转换原始结果
-                srt_content = self._generate_srt_from_raw_result(result)
+                srt_content = self._generate_srt_from_raw_result(result, task_id=task_id)
                 
                 # 更新进度
                 if progress_callback:
@@ -339,11 +339,11 @@ class FunASRTranscriber:
                     "duration": duration,
                     "processing_time": processing_time,
                     "raw_result": result,  # 保存原始结果用于缓存
-                    "segments": self._parse_and_merge_segments(result),
+                    "segments": self._parse_and_merge_segments(result, task_id=task_id),
                 }
             else:
                 # JSON格式：canonical 句级 segments（合并视图在 serve 投影层）
-                segments = self._parse_and_merge_segments(result)
+                segments = self._parse_and_merge_segments(result, task_id=task_id)
                 
                 # 提取说话人列表
                 speakers = sorted(list(set(seg.speaker for seg in segments)))
@@ -376,38 +376,63 @@ class FunASRTranscriber:
             logger.error(f"转录失败: {e}")
             raise Exception(f"转录失败: {str(e)}")
     
-    def _parse_and_merge_segments(self, result: Any) -> List[TranscriptionSegment]:
+    def _validated_funasr_sentences(
+        self,
+        result: Any,
+        task_id: Optional[str] = None,
+        *,
+        log_empty: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """校验 FunASR 顶层结果；明确空文本或显式空句列表可作为合法空结果。"""
+        def invalid(reason: str) -> None:
+            logger.error("FunASR result invalid_shape: task_id={} state=invalid_shape", task_id or "unknown")
+            raise ValueError(f"FunASR result invalid-shape: {reason}")
+
+        if isinstance(result, list):
+            if not result:
+                invalid("empty result list")
+            result_data = result[0]
+        elif isinstance(result, dict):
+            result_data = result
+        else:
+            invalid("top-level result must be an object or list")
+        if not isinstance(result_data, dict):
+            invalid("first result must be an object")
+
+        text_present = "text" in result_data
+        raw_text = result_data.get("text")
+        if text_present and not isinstance(raw_text, str):
+            invalid("text must be a string")
+        empty_text = text_present and not raw_text.strip()
+        if "sentence_info" not in result_data:
+            if not empty_text:
+                invalid("missing sentence_info")
+            sentences = []
+        else:
+            sentences = result_data["sentence_info"]
+            if not isinstance(sentences, list):
+                invalid("sentence_info must be a list")
+            if not sentences and text_present and not empty_text:
+                invalid("non-empty text has no sentence entries")
+
+        if not sentences and log_empty:
+            state = "empty_text" if text_present else "empty_sentence_info"
+            logger.info("FunASR result empty_result: task_id={} state={}", task_id or "unknown", state)
+        return sentences
+
+    def _parse_and_merge_segments(
+        self,
+        result: Any,
+        task_id: Optional[str] = None,
+    ) -> List[TranscriptionSegment]:
         """解析 FunASR 结果为句级 segments（canonical 真值）.
 
         同说话人相邻句合并已迁到 serve 投影层 ``merge_segments_view``
         （见 result_projection / issue #1）; 本方法只解析 sentence_info，
-        时间戳全部保留测量值进缓存。方法名历史遗留，语义已是 parse-only。
+        时间戳全部保留测量值进缓存。方法名历史遗留，语义已是 parse-only.
         """
         segments: List[TranscriptionSegment] = []
-
-        logger.debug(f"解析结果 - 输入类型: {type(result)}, 内容: {result}")
-
-        # 处理结果格式
-        if isinstance(result, list):
-            if len(result) > 0:
-                result_data = result[0]
-            else:
-                logger.warning("FunASR返回了空列表，可能是音频处理失败")
-                return segments
-        elif isinstance(result, dict):
-            result_data = result
-        else:
-            logger.warning(f"未知的结果格式: {type(result)}")
-            return segments
-
-        logger.debug(f"使用数据，键: {list(result_data.keys()) if isinstance(result_data, dict) else 'N/A'}")
-
-        # 检查是否有 sentence_info（成功转录的标志）
-        if 'sentence_info' not in result_data:
-            logger.warning("结果中没有sentence_info字段，可能转录失败")
-            return segments
-
-        sentences = result_data.get('sentence_info', [])
+        sentences = self._validated_funasr_sentences(result, task_id=task_id)
         logger.info(f"找到 {len(sentences)} 个句子片段")
 
         for sentence in sentences:
@@ -434,57 +459,50 @@ class FunASRTranscriber:
 
         logger.info(f"最终生成 {len(segments)} 个句级转录片段（合并在 serve 投影层）")
         return segments
-    
-    def _generate_srt_from_raw_result(self, result: Any) -> str:
-        """从原始FunASR结果生成SRT格式字符串"""
+
+    def _generate_srt_from_raw_result(
+        self,
+        result: Any,
+        task_id: Optional[str] = None,
+    ) -> str:
+        """Render SRT from validated FunASR sentences without logging recognition text."""
         srt_lines = []
-        
-        # 处理结果格式
-        if isinstance(result, list) and len(result) > 0:
-            result_data = result[0]
-        elif isinstance(result, dict):
-            result_data = result
-        else:
-            logger.warning(f"未知的结果格式: {type(result)}")
-            return ""
-        
-        # 检查是否有sentence_info
-        if 'sentence_info' not in result_data:
-            logger.warning("结果中没有sentence_info字段，可能转录失败")
-            return ""
-        
-        sentences = result_data.get('sentence_info', [])
+        sentences = self._validated_funasr_sentences(
+            result,
+            task_id=task_id,
+            log_empty=False,
+        )
         logger.info(f"生成SRT: {len(sentences)} 个句子片段")
-        
+
         # 生成SRT格式
         for idx, sentence in enumerate(sentences, 1):
             # 提取时间戳（毫秒转秒）
             start_ms = sentence.get('start', 0)
             end_ms = sentence.get('end', 0)
-            
+
             # 转换为SRT时间格式 (HH:MM:SS,mmm)
             start_time = self._ms_to_srt_time(start_ms)
             end_time = self._ms_to_srt_time(end_ms)
-            
+
             # 提取文本
             text = sentence.get('text', '').strip()
-            
+
             # 提取说话人
             speaker_id = sentence.get('spk', 0)
             if isinstance(speaker_id, int):
                 speaker = f"Speaker{speaker_id + 1}"
             else:
                 speaker = "Speaker1"
-            
+
             if text:  # 只添加非空文本
                 # SRT格式：序号 -> 时间 -> 文本
                 srt_lines.append(f"{idx}")
                 srt_lines.append(f"{start_time} --> {end_time}")
                 srt_lines.append(f"{speaker}:{text}")
                 srt_lines.append("")  # 空行分隔
-        
+
         return "\n".join(srt_lines)
-    
+
     def _ms_to_srt_time(self, milliseconds: int) -> str:
         """将毫秒转换为SRT时间格式 (HH:MM:SS,mmm)"""
         seconds = milliseconds / 1000
