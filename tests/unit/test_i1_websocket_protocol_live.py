@@ -58,6 +58,7 @@ def _fake_task_manager():
         task = TranscriptionTask(
             task_id=task_id, file_name=request.file_name, file_path="",
             file_size=request.file_size, file_hash=request.file_hash, engine="funasr",
+            output_format=request.output_format,
             options=TranscribeOptions(
                 language=request.language, diarize=request.diarize,
                 word_align=bool(request.word_align), terms=list(request.terms),
@@ -173,3 +174,93 @@ async def test_live_chunked_upload_terms_reach_finalize(monkeypatch, tmp_path):
         assert requests[0].terms == ["Alpha"]
         assert tm.submit_task.await_count == 1
         assert handler.upload_sessions == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["json", "srt"])
+async def test_live_reconnect_reads_original_task_result_after_disconnect(
+    monkeypatch, tmp_path, output_format,
+):
+    """真实 socket 断开不取消任务，重连后 batch 查询取回对应格式的终态。"""
+    from src.models.schemas import TaskStatus, TranscriptionResult, TranscriptionSegment
+
+    async with _running_server(monkeypatch) as (handler, port, _config):
+        tm, tasks, _requests = _fake_task_manager()
+        audio = b"reconnect-audio"
+
+        async def save_file(data, file_name):
+            path = tmp_path / file_name
+            path.write_bytes(data)
+            return str(path), None
+
+        with patch("src.core.task_manager.task_manager", tm), \
+             patch("src.utils.file_utils.save_uploaded_file", new=AsyncMock(side_effect=save_file)):
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as first_ws:
+                await _receive_type(first_ws, "connected")
+                await first_ws.send(json.dumps({"type": "upload_request", "data": {
+                    "file_name": "reconnect.wav", "file_size": len(audio),
+                    "file_hash": hashlib.md5(audio).hexdigest(),
+                    "force_refresh": True, "output_format": output_format,
+                }}))
+                ready = await _receive_type(first_ws, "upload_ready")
+                task_id = ready["data"]["task_id"]
+                await first_ws.send(json.dumps({"type": "upload_data", "data": {
+                    "task_id": task_id,
+                    "file_data": base64.b64encode(audio).decode(),
+                }}))
+                await _receive_type(first_ws, "upload_complete")
+
+                # 模拟 worker 已接手任务后客户端掉线，任务对象仍处于 PROCESSING。
+                tasks[task_id].status = TaskStatus.PROCESSING
+
+            assert tasks[task_id].status == TaskStatus.PROCESSING
+            assert tm.create_task.await_count == 1
+            assert tm.submit_task.await_count == 1
+            tm.cancel_task.assert_not_called()
+
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as resumed_ws:
+                await _receive_type(resumed_ws, "connected")
+                query = json.dumps({"type": "task_status_batch", "data": {"task_ids": [task_id]}})
+                await resumed_ws.send(query)
+                processing_response = await _receive_type(resumed_ws, "task_status_batch")
+                processing_item, = processing_response["data"]["items"]
+                assert processing_item["task_id"] == task_id
+                assert processing_item["status"] == "processing"
+                assert processing_item["result"] is None
+                assert processing_item["srt_content"] is None
+
+                if output_format == "json":
+                    tasks[task_id].result = TranscriptionResult(
+                        task_id=task_id,
+                        file_name="reconnect.wav",
+                        file_hash=hashlib.md5(audio).hexdigest(),
+                        duration=1.0,
+                        segments=[TranscriptionSegment(
+                            start_time=0.0, end_time=1.0, text="recovered",
+                        )],
+                        speakers=[],
+                        processing_time=0.1,
+                        metadata={"engine": "funasr"},
+                    )
+                    original_result = tasks[task_id].result.model_dump(mode="json")
+                else:
+                    original_result = "1\n00:00:00,000 --> 00:00:01,000\nrecovered\n"
+                    tasks[task_id].srt_content = original_result
+                tasks[task_id].progress = 100.0
+                tasks[task_id].status = TaskStatus.COMPLETED
+
+                await resumed_ws.send(query)
+                response = await _receive_type(resumed_ws, "task_status_batch")
+
+        item, = response["data"]["items"]
+        assert item["task_id"] == task_id
+        assert item["status"] == "completed"
+        if output_format == "json":
+            assert item["result"] == original_result
+            assert item["srt_content"] is None
+        else:
+            assert item["srt_content"] == original_result
+            assert item["result"] is None
+        assert tm.create_task.await_count == 1
+        assert tm.submit_task.await_count == 1
+        tm.cancel_task.assert_not_called()

@@ -23,6 +23,7 @@ import base64
 import hashlib
 import tempfile
 import os
+import re
 import time
 import uuid
 from pydantic import ValidationError
@@ -69,7 +70,7 @@ class WebSocketHandler:
             
             # 注册连接
             self.connections[connection_id] = websocket
-            logger.info(f"WebSocket连接建立: {connection_id}")
+            logger.info(f"WebSocket连接建立: connection_ref={self._connection_log_ref(connection_id)}")
             
             # 发送欢迎消息
             await self._send_message(websocket, "connected", {
@@ -81,22 +82,90 @@ class WebSocketHandler:
             
             # 处理消息
             async for message in websocket:
+                data = None
                 try:
                     data = json.loads(message)
                     await self._handle_message(websocket, connection_id, data)
                 except json.JSONDecodeError:
                     await self._send_error(websocket, "invalid_json", "无效的JSON格式")
+                except websockets.exceptions.ConnectionClosed:
+                    raise
                 except Exception as e:
-                    logger.error(f"处理消息失败: {e}")
-                    await self._send_error(websocket, "message_error", str(e))
+                    message_type = data.get("type") if isinstance(data, dict) else None
+                    if not isinstance(message_type, str) or message_type not in {
+                        "ping", "upload_request", "upload_data", "upload_chunk",
+                        "finalize_upload", "task_status", "task_status_batch", "cancel_task",
+                    }:
+                        message_type = "unknown"
+                    message_data = data.get("data") if isinstance(data, dict) else None
+                    task_id = message_data.get("task_id") if isinstance(message_data, dict) else None
+                    if message_type == "task_status_batch" and task_id is None and isinstance(message_data, dict):
+                        task_ids = message_data.get("task_ids")
+                        task_id = task_ids[0] if isinstance(task_ids, list) and len(task_ids) == 1 else None
+                    if not isinstance(task_id, str) or re.fullmatch(
+                        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", task_id
+                    ) is None:
+                        task_id = None
+                    else:
+                        task_id = task_id.lower()
+                    self._log_websocket_exception(
+                        e,
+                        level="ERROR",
+                        stage="message_handler",
+                        connection_id=connection_id,
+                        message_type=message_type,
+                        task_id=task_id,
+                    )
+                    await self._send_error(websocket, "message_error", "消息处理失败")
                     
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f"WebSocket连接关闭: {connection_id}")
+        except websockets.exceptions.ConnectionClosed as e:
+            normal_close = isinstance(e, websockets.exceptions.ConnectionClosedOK)
+            self._log_websocket_exception(
+                e,
+                level="INFO" if normal_close else "WARNING",
+                stage="connection_closed" if normal_close else "abnormal_close",
+                connection_id=connection_id,
+                message_type=None,
+            )
         except Exception as e:
-            logger.error(f"WebSocket处理错误: {e}")
+            self._log_websocket_exception(
+                e,
+                level="ERROR",
+                stage="connection_handler",
+                connection_id=connection_id,
+                message_type=None,
+            )
         finally:
             # 清理连接
             self._cleanup_connection(connection_id)
+
+    def _connection_log_ref(self, connection_id: str) -> str:
+        """用稳定哈希串联连接日志，同时避免把远端地址写入日志。"""
+        return hashlib.sha256(connection_id.encode("utf-8")).hexdigest()[:16]
+
+    def _log_websocket_exception(
+        self,
+        error: Exception,
+        *,
+        level: str,
+        stage: str,
+        connection_id: str,
+        message_type: Optional[str],
+        task_id: Optional[str] = None,
+    ) -> None:
+        """记录安全的 WebSocket 诊断字段，不读取异常正文或远端 close reason。"""
+        connection_ref = self._connection_log_ref(connection_id)
+        logger.log(
+            level,
+            "WebSocket异常: connection_ref={} task_id={} stage={} message_type={} "
+            "exception_class={} close_code={}",
+            connection_ref,
+            task_id,
+            stage,
+            message_type,
+            type(error).__name__,
+            getattr(error, "code", None),
+        )
 
     def _build_capabilities(self) -> dict[str, object]:
         """Compose the same minimal capability contract advertised over HTTP."""
@@ -542,7 +611,11 @@ class WebSocketHandler:
                 try:
                     await self._send_message(websocket, "task_progress", data)
                 except Exception as e:
-                    logger.error(f"发送进度通知失败: {e}")
+                    self._log_websocket_exception(
+                        e, level="ERROR",
+                        stage="failure_progress_notification" if status == "failed" else "progress_notification",
+                        connection_id=conn_id, message_type="task_progress", task_id=task_id,
+                    )
                     self._cleanup_connection(conn_id)
 
     async def notify_task_error(
@@ -565,7 +638,10 @@ class WebSocketHandler:
                         ).model_dump(),
                     )
                 except Exception as e:
-                    logger.error(f"发送任务错误通知失败: {e}")
+                    self._log_websocket_exception(
+                        e, level="ERROR", stage="failure_notification",
+                        connection_id=conn_id, message_type="error", task_id=task_id,
+                    )
                     self._cleanup_connection(conn_id)
     
     async def notify_task_complete(self, task_id: str, result: dict):
@@ -585,7 +661,10 @@ class WebSocketHandler:
                 try:
                     await self._send_message(websocket, "task_complete", data)
                 except Exception as e:
-                    logger.error(f"发送完成通知失败: {e}")
+                    self._log_websocket_exception(
+                        e, level="ERROR", stage="completion_notification",
+                        connection_id=conn_id, message_type="task_complete", task_id=task_id,
+                    )
                     self._cleanup_connection(conn_id)
         
         # 清理任务连接关系
@@ -614,7 +693,7 @@ class WebSocketHandler:
                 if not conn_ids:
                     del self.task_connections[task_id]
         
-        logger.debug(f"连接已清理: {connection_id}")
+        logger.debug(f"连接已清理: connection_ref={self._connection_log_ref(connection_id)}")
     
     async def _handle_chunked_upload_request(
         self,
