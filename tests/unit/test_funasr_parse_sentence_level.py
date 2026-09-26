@@ -5,8 +5,9 @@ Linux 本机常无 funasr/torch 完整栈; 注入假模块后 import 类, 只测
 from __future__ import annotations
 
 import sys
+import threading
 from types import ModuleType
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -93,6 +94,76 @@ class TestParseSentenceLevel:
 
     def test_empty_sentence_info(self, transcriber):
         assert transcriber._parse_and_merge_segments([{"sentence_info": []}]) == []
+
+    @pytest.mark.parametrize("result", [
+        {"text": "recognition text"},
+        {"text": "recognition text", "sentence_info": []},
+    ])
+    def test_nonempty_text_without_sentences_fails_json_and_srt(self, transcriber, result):
+        with pytest.raises(ValueError, match="FunASR result invalid-shape"):
+            transcriber._parse_and_merge_segments([result])
+        with pytest.raises(ValueError, match="FunASR result invalid-shape"):
+            transcriber._generate_srt_from_raw_result([result])
+
+    @pytest.mark.parametrize("result", [
+        {"text": ""},
+        {"text": "", "sentence_info": []},
+    ])
+    def test_explicit_empty_text_without_sentences_is_empty_success(self, transcriber, result):
+        assert transcriber._parse_and_merge_segments([result]) == []
+        assert transcriber._generate_srt_from_raw_result([result]) == ""
+
+    @pytest.mark.parametrize("result", [[], [None], None, {}])
+    def test_unknown_or_missing_text_shape_fails(self, transcriber, result):
+        with pytest.raises(ValueError, match="FunASR result invalid-shape"):
+            transcriber._parse_and_merge_segments(result)
+        with pytest.raises(ValueError, match="FunASR result invalid-shape"):
+            transcriber._generate_srt_from_raw_result(result)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("output_format", ["json", "srt"])
+    async def test_transcribe_rejects_invalid_result_without_sensitive_logs(
+        self, transcriber, monkeypatch, output_format
+    ):
+        import src.core.funasr_transcriber as funasr_module
+        import src.utils.file_utils as file_utils
+
+        test_logger = MagicMock()
+        monkeypatch.setattr(funasr_module, "logger", test_logger)
+        transcriber.is_initialized = True
+        transcriber.concurrency_mode = "lock"
+        transcriber.config = {"funasr": {"batch_size_s": 20}, "transcription": {}}
+        transcriber._model_lock = threading.Lock()
+        transcriber.model = MagicMock()
+        transcriber.model.generate.return_value = [{"text": "private recognition payload"}]
+        monkeypatch.setattr(funasr_module, "get_audio_duration", lambda _path: 1.0)
+        monkeypatch.setattr(funasr_module, "release_accelerator_memory", lambda **_kwargs: None)
+        monkeypatch.setattr(file_utils, "calculate_file_hash", AsyncMock(return_value="hash"))
+
+        with pytest.raises(Exception, match="FunASR result invalid-shape"):
+            await transcriber.transcribe(
+                audio_path="/tmp/private-audio.wav",
+                task_id="task-42",
+                output_format=output_format,
+            )
+
+        log_arguments = [
+            str(value)
+            for method in (test_logger.debug, test_logger.info, test_logger.warning, test_logger.error)
+            for call in method.call_args_list
+            for value in call.args
+        ]
+        logs = "\n".join(log_arguments)
+        assert any(
+            call.args[:2] == (
+                "FunASR result invalid_shape: task_id={} state=invalid_shape",
+                "task-42",
+            )
+            for call in test_logger.error.call_args_list
+        )
+        assert "invalid_shape" in logs
+        assert "private recognition payload" not in logs
+        assert "private-audio.wav" not in logs
 
     def test_skips_empty_text(self, transcriber):
         mock_result = [{
