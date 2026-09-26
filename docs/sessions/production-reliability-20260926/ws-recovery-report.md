@@ -40,3 +40,9 @@ tests/unit/test_qwen3_encoder_provider.py::TestExistingBranchesUnchanged::test_d
 - 恢复测试使用真实 loopback WebSocket server、真实帧序列化和 handler，但任务管理器与模型执行由 fake manager/测试结果模拟；它证明连接断开后 handler 不发取消、不重投，且可从同一任务对象序列化取回 JSON/SRT。它没有验证真实模型或生产 worker 的持续执行。
 - 默认终态保留时间与数量上限由配置定义为 3600 秒、500 条；环境变量可覆盖，达到数量上限时旧终态可能提前移除。
 - 本仓没有 GitHub Actions workflow，不报告 CI 结果。未连接或操作生产环境。
+
+## OCR 续修
+
+- OCR 状态为 `reviewed`；独立复核为 `partial`（13 项候选中 12 项已复核、1 项超时）。本轮只修复主脑采纳的两项诊断缺陷：消息处理中遇到连接关闭时直接交外层分类；重连任务日志按严格 UUID 格式保留标识，不再依赖已清理的连接映射。批量查询仅在 `task_ids` 恰有一个字符串时关联该 ID；列表形状与非 UUID 文本记录为 `task_id=None`。
+- 新增测试在修复前有 2 项失败（合法 UUID 被丢弃、连接关闭误入 `message_handler`）；修复后，受影响四个测试文件 **40 passed**。日志断言检查实际 formatter 输出，并确认敏感关闭原因、任意 ID 文本不入日志，连接关闭只分类一次且不发送 `message_error`。
+- 这轮只复核了上述异常诊断路径；原恢复测试仍使用 fake TaskManager 与模拟模型结果，不代表真实生产 worker 或模型任务持续执行已验证。

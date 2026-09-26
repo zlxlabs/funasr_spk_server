@@ -23,6 +23,7 @@ import base64
 import hashlib
 import tempfile
 import os
+import re
 import time
 import uuid
 from pydantic import ValidationError
@@ -87,6 +88,8 @@ class WebSocketHandler:
                     await self._handle_message(websocket, connection_id, data)
                 except json.JSONDecodeError:
                     await self._send_error(websocket, "invalid_json", "无效的JSON格式")
+                except websockets.exceptions.ConnectionClosed:
+                    raise
                 except Exception as e:
                     message_type = data.get("type") if isinstance(data, dict) else None
                     if not isinstance(message_type, str) or message_type not in {
@@ -96,8 +99,15 @@ class WebSocketHandler:
                         message_type = "unknown"
                     message_data = data.get("data") if isinstance(data, dict) else None
                     task_id = message_data.get("task_id") if isinstance(message_data, dict) else None
-                    if not isinstance(task_id, str) or task_id not in self.task_connections:
+                    if message_type == "task_status_batch" and task_id is None and isinstance(message_data, dict):
+                        task_ids = message_data.get("task_ids")
+                        task_id = task_ids[0] if isinstance(task_ids, list) and len(task_ids) == 1 else None
+                    if not isinstance(task_id, str) or re.fullmatch(
+                        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", task_id
+                    ) is None:
                         task_id = None
+                    else:
+                        task_id = task_id.lower()
                     self._log_websocket_exception(
                         e,
                         level="ERROR",
@@ -115,7 +125,7 @@ class WebSocketHandler:
                 level="INFO" if normal_close else "WARNING",
                 stage="connection_closed" if normal_close else "abnormal_close",
                 connection_id=connection_id,
-                message_type="receive_loop",
+                message_type=None,
             )
         except Exception as e:
             self._log_websocket_exception(
@@ -123,7 +133,7 @@ class WebSocketHandler:
                 level="ERROR",
                 stage="connection_handler",
                 connection_id=connection_id,
-                message_type="connection",
+                message_type=None,
             )
         finally:
             # 清理连接

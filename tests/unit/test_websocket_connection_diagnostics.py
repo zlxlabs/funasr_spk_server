@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 import websockets
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 from loguru import logger
 
 from src.api.websocket_handler import WebSocketHandler
@@ -73,14 +75,26 @@ async def test_notification_errors_log_safe_connection_and_task_context(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("payload", "expected_message_type"),
+    ("payload", "expected_message_type", "expected_task_id"),
     [
-        ({"type": "task_status_batch", "data": {"task_ids": []}}, "task_status_batch"),
-        ({"type": [], "data": {"task_ids": []}}, "unknown"),
-        ({"type": "task_status_batch", "data": {"task_id": []}}, "task_status_batch"),
+        ({"type": "task_status_batch", "data": {"task_ids": []}}, "task_status_batch", None),
+        ({"type": [], "data": {"task_ids": []}}, "unknown", None),
+        ({"type": "task_status_batch", "data": {"task_id": []}}, "task_status_batch", None),
+        (
+            {"type": "task_status_batch", "data": {"task_ids": ["123e4567-e89b-12d3-a456-426614174000"]}},
+            "task_status_batch",
+            "123e4567-e89b-12d3-a456-426614174000",
+        ),
+        (
+            {"type": "task_status_batch", "data": {"task_ids": ["SECRET_TASK_BODY"]}},
+            "task_status_batch",
+            None,
+        ),
     ],
 )
-async def test_message_logs_safe_fields_for_bad_shapes(monkeypatch, payload, expected_message_type):
+async def test_message_logs_safe_fields_for_bad_shapes(
+    monkeypatch, payload, expected_message_type, expected_task_id,
+):
     from src.core.config import config
 
     monkeypatch.setattr(config.auth, "enabled", False)
@@ -116,11 +130,58 @@ async def test_message_logs_safe_fields_for_bad_shapes(monkeypatch, payload, exp
     assert "SECRET_MESSAGE_BODY" not in output
     assert "RuntimeError" in output
     assert f"message_type={expected_message_type}" in output
+    assert f"task_id={expected_task_id}" in output
+    assert "SECRET_TASK_BODY" not in output
     connected = websocket.sent[0]
     connection_id = connected["data"]["connection_id"]
     connection_ref = hashlib.sha256(connection_id.encode("utf-8")).hexdigest()[:16]
     assert f"connection_ref={connection_ref}" in output
     assert websocket.sent[-1]["data"]["message"] != "SECRET_MESSAGE_BODY"
+
+
+@pytest.mark.asyncio
+async def test_message_connection_closed_is_classified_once_without_send_error(monkeypatch):
+    from src.core.config import config
+
+    monkeypatch.setattr(config.auth, "enabled", False)
+    handler = WebSocketHandler()
+    handler._build_capabilities = lambda: {}
+
+    class OneMessageSocket:
+        remote_address = ("127.0.0.1", 43211)
+
+        def __init__(self):
+            self.messages = iter([json.dumps({"type": "ping", "data": {}})])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.messages)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def send(self, payload):
+            pass
+
+    websocket = OneMessageSocket()
+    handler._handle_message = AsyncMock(
+        side_effect=ConnectionClosedError(Close(4001, "SECRET_CLOSE_REASON"), None)
+    )
+    handler._send_error = AsyncMock()
+
+    with _captured_websocket_logs() as stream:
+        await handler.handle_connection(websocket, "/")
+
+    output = stream.getvalue()
+    assert output.count("WebSocket异常") == 1
+    assert "stage=abnormal_close" in output
+    assert "message_type=None" in output
+    assert "ConnectionClosedError" in output
+    assert "SECRET_CLOSE_REASON" not in output
+    assert "stage=message_handler" not in output
+    handler._send_error.assert_not_awaited()
 
 
 @pytest.mark.asyncio
