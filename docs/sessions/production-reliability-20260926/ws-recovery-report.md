@@ -3,7 +3,8 @@
 - 任务：`funasr_spk_server-20260926-B`
 - 分支：`feat/funasr-ws-recovery-0926`
 - 基线：`ec0b892035ff1def7e1168254b5b89622c5e7bae`
-- 实现提交：`692e9d43a8edd6adccf55980883ff1111af1174e`
+- 初始实现提交：`692e9d43a8edd6adccf55980883ff1111af1174e`
+- 最终业务冻结 SHA：`e602f796a8b4d51c8681ede567f8b9422b52f40f`
 
 ## 结果
 
@@ -46,3 +47,10 @@ tests/unit/test_qwen3_encoder_provider.py::TestExistingBranchesUnchanged::test_d
 - OCR 状态为 `reviewed`；独立复核为 `partial`（13 项候选中 12 项已复核、1 项超时）。本轮只修复主脑采纳的两项诊断缺陷：消息处理中遇到连接关闭时直接交外层分类；重连任务日志按严格 UUID 格式保留标识，不再依赖已清理的连接映射。批量查询仅在 `task_ids` 恰有一个字符串时关联该 ID；列表形状与非 UUID 文本记录为 `task_id=None`。
 - 新增测试在修复前有 2 项失败（合法 UUID 被丢弃、连接关闭误入 `message_handler`）；修复后，受影响四个测试文件 **40 passed**。日志断言检查实际 formatter 输出，并确认敏感关闭原因、任意 ID 文本不入日志，连接关闭只分类一次且不发送 `message_error`。
 - 这轮只复核了上述异常诊断路径；原恢复测试仍使用 fake TaskManager 与模拟模型结果，不代表真实生产 worker 或模型任务持续执行已验证。
+
+## 最终验证与审查
+
+- Linux 最新定向结果：上述四个 WebSocket/task status 测试文件 **40 passed**。Mac 冻结组合为 A `4e49d35` + B `e602f79`；Mac 上恢复与诊断两个测试文件 **17 passed, 1 warning in 0.58s**，日志见主脑白名单回读的 `/tmp/funasr-result-contract-4e49d35/logs/B-targeted-unit.log`。
+- Mac 组合验证中，真实 FunASR 服务子进程的 JSON、SRT、缓存命中 3 项，以及 3 项模型 parity 测试通过。完整 integration 套件整体未全绿：仍有 Qwen 环境失败和额外临时探针失败；主脑按 A 正基线归因核对，未把这些失败隐去或表述为全套通过。
+- Linux 全量 unit 的 11 个失败/错误节点与 base、A H0 保存的基线节点集合逐项一致；这只说明已测失败子集匹配基线，不代表全量 unit 全绿。独立静态审查结论为 P1/P2/P3 均 0；R2 运行时审查结论为 `failure-visibility: clean`，审查证据分别见 `reviews/B-r1-verdict.md` 与 `reviews/B-r2-verdict.md`。
+- Mac 真实服务 E2E 没有断线步骤，断线恢复用例仍使用 fake TaskManager 和模拟模型结果；两类证据不能合并成真实生产 worker 断线后持续执行已验证。本仓没有 GitHub Actions workflow，也未部署或操作生产。
