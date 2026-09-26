@@ -121,7 +121,7 @@ N=1 单跑 60min audio,在以下 commit 各跑一次:
 
 ## 6. 工作目录 + 环境
 
-- 仓库: `/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
+- 仓库: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
 - 分支: `spike/qwen3-diarize-poc` (当前 HEAD `92e8442`,3 commit ahead origin 已 push)
 - venv: `venv/bin/python`
 - 关键音频(都在 `tmp_long_audio/eval_set/`):

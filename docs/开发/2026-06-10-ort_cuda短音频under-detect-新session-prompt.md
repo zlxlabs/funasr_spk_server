@@ -79,7 +79,7 @@ after cluster_merge:   clusters=1  （此层无关）
 
 ## 环境速查
 
-- 3060：`ssh zlx@100.103.92.95`，项目 `/home/zlx/Dev/projects/funasr_spk_server`，
+- 3060：`ssh <user>@<dev-host>`，项目 `~/Dev/projects/funasr_spk_server`，
   分支 `spike/qwen3-diarize-poc`，server 起法/坑见该机记忆与 `~/start_cuda.sh`
 - 分层诊断脚本（本次用过，远端 `/tmp/diag_60s.py`）：调
   `run_diarization_dispatched` → `filter_spurious_speakers` →

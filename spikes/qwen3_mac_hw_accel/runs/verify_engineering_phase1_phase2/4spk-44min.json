@@ -3236,7 +3236,7 @@
   "wall": 418.3117756659922,
   "meta": {
     "label": "4spk-44min",
-    "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_4spk.m4a",
+    "audio_path": "~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_4spk.m4a",
     "wall": 415.05838858301286,
     "duration": 2625.89825,
     "rtf": 0.15806339357704086,

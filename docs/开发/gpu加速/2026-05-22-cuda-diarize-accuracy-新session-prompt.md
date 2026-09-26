@@ -59,7 +59,7 @@ DER 需要 GT 才能算, 没有 GT 也能跑前 3 个维度的定性评测.
 ls tests/fixtures/audio/
 
 # 远端可能有更多 (历史 sprint 跑过的)
-ssh zlx@100.103.92.95 'ls ~/Dev/projects/funasr_spk_server/tests/fixtures/audio/ 2>/dev/null; \
+ssh <user>@<dev-host> 'ls ~/Dev/projects/funasr_spk_server/tests/fixtures/audio/ 2>/dev/null; \
                        ls ~/Dev/projects/funasr_spk_server/fixtures/ 2>/dev/null'
 ```
 
@@ -191,7 +191,7 @@ podcast_2speakers_60s.wav (真实 2 人):
 ```bash
 # 1. 扫一遍可用音频
 ls tests/fixtures/audio/
-ssh zlx@100.103.92.95 'ls ~/Dev/projects/funasr_spk_server/tests/fixtures/audio/ 2>/dev/null; \
+ssh <user>@<dev-host> 'ls ~/Dev/projects/funasr_spk_server/tests/fixtures/audio/ 2>/dev/null; \
                        ls ~/Dev/projects/funasr_spk_server/fixtures/ 2>/dev/null'
 
 # 2. 看现有 diarize 评测脚本 (能不能复用)
@@ -207,7 +207,7 @@ grep -n "def run_diarization" src/core/qwen3/diarize_ort.py src/core/qwen3/diari
 
 ## 远端 cuda 环境提醒
 
-- ssh `zlx@100.103.92.95`
+- ssh `<user>@<dev-host>`
 - 工作目录: `~/Dev/projects/funasr_spk_server/`
 - LD_LIBRARY_PATH 配置见 `scripts/_remote_*.sh` 头部, 或参考:
   ```bash
@@ -218,8 +218,8 @@ grep -n "def run_diarization" src/core/qwen3/diarize_ort.py src/core/qwen3/diari
 - 一句 env 配置: `export FUNASR_PROFILE=cuda_dev` (见 CLAUDE.md "Config 体系 > 切换设备/切引擎操作手册")
 - rsync 正确姿势 (path 已修正, 之前 plan doc 写错):
   ```bash
-  rsync -av --exclude='__pycache__' src/ zlx@100.103.92.95:/home/zlx/Dev/projects/funasr_spk_server/src/
-  rsync -av --exclude='__pycache__' scripts/ zlx@100.103.92.95:/home/zlx/Dev/projects/funasr_spk_server/scripts/
+  rsync -av --exclude='__pycache__' src/ <user>@<dev-host>:~/Dev/projects/funasr_spk_server/src/
+  rsync -av --exclude='__pycache__' scripts/ <user>@<dev-host>:~/Dev/projects/funasr_spk_server/scripts/
   ```
 
 ---

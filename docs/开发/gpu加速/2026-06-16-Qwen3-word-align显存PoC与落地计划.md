@@ -1,10 +1,10 @@
 # Qwen3 word_align 显存 PoC 与落地计划
 
 **Date**: 2026-06-16
-**Dev box**: `zlx-vm-work-i7-ubuntu2404-3060llm-dev` / `100.103.92.95`
+**Dev box**: `zlx-vm-work-i7-ubuntu2404-3060llm-dev` / `<dev-host>`
 **GPU**: RTX 3060 12GB
-**Service**: `funasr-server.service`, `ws://100.103.92.95:8867`
-**Repo**: `/home/zlx/Dev/projects/funasr_spk_server`
+**Service**: `funasr-server.service`, `ws://<dev-host>:8867`
+**Repo**: `~/Dev/projects/funasr_spk_server`
 **Profile**: `FUNASR_PROFILE=cuda_dev`
 
 ## TL;DR
@@ -55,7 +55,7 @@ Environment=FUNASR_QWEN3_WORD_ALIGN_ENABLED=false
 测试音频和脚本：
 
 ```bash
-cd /home/zlx/Dev/projects/funasr_spk_server
+cd ~/Dev/projects/funasr_spk_server
 venv/bin/python scripts/_remote_diarize_e2e_probe.py \
   --server ws://localhost:8867 \
   --audio tests/fixtures/audio/podcast_2speakers_60s.wav
@@ -424,7 +424,7 @@ sudo systemctl restart funasr-server.service
 跑 probe：
 
 ```bash
-cd /home/zlx/Dev/projects/funasr_spk_server
+cd ~/Dev/projects/funasr_spk_server
 venv/bin/python scripts/_remote_diarize_e2e_probe.py \
   --server ws://localhost:8867 \
   --audio tests/fixtures/audio/podcast_2speakers_60s.wav

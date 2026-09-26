@@ -31,7 +31,7 @@
 
 word_align 的 CUDA ONNX session 一旦加载,显存**赖着不走**——这是 ORT BFCArena 高水位分配器的特性,**唯一可靠的释放是进程退出**。
 
-2026-06-16 在 3060 dev box(`ws://100.103.92.95:8867`,与 CapsWriter 2.86GB 同卡共驻)实测,同一段 60s 音频连续跑 word_align 任务:
+2026-06-16 在 3060 dev box(`ws://<dev-host>:8867`,与 CapsWriter 2.86GB 同卡共驻)实测,同一段 60s 音频连续跑 word_align 任务:
 
 ```
 funasr 进程显存(MiB):
@@ -99,7 +99,7 @@ sidecar 落地后,进程内 poison/dispose 这套「band-aid」可以保留作�
 
 ## 3060 dev box 信息(真机验证用)
 
-- `ssh zlx@100.103.92.95`,仓库 `/home/zlx/Dev/projects/funasr_spk_server`,`FUNASR_PROFILE=cuda_dev`,端口 8867,systemd `funasr-server.service`(`sudo systemctl restart`),日志 `logs/server_cuda.log`(不是 journald)。
+- `ssh <user>@<dev-host>`,仓库 `~/Dev/projects/funasr_spk_server`,`FUNASR_PROFILE=cuda_dev`,端口 8867,systemd `funasr-server.service`(`sudo systemctl restart`),日志 `logs/server_cuda.log`(不是 journald)。
 - 同卡共驻 CapsWriter(~2.86GB)+ samapi(docker,需要腾显存时 `docker stop samapi`)。**别 OOM 轰共驻服务**。
 - 重启服务可把 word_align 显存压回 idle 基线(~2110 MiB)。
 - 真机跑验收:`venv/bin/python scripts/_remote_word_align_probe.py --server ws://localhost:8867 --audio tests/fixtures/audio/podcast_2speakers_60s.wav`。

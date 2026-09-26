@@ -23,7 +23,7 @@
 
 | 项 | 值 |
 |---|---|
-| dev 机器 | `ssh zlx@100.103.92.95` (Tailscale), RTX 3060 12G, Ubuntu 24.04, Python 3.12, 4 vCPU(用户会改 8) |
+| dev 机器 | `ssh <user>@<dev-host>` (Tailscale), RTX 3060 12G, Ubuntu 24.04, Python 3.12, 4 vCPU(用户会改 8) |
 | 工作目录 | `~/Dev/projects/funasr_spk_server` |
 | venv | `venv/`(已装 onnxruntime-gpu 1.26 + sherpa-onnx 1.13.2+cuda12.cudnn9 + tensorrt-cu12 10.9 + 所有依赖) |
 | 关键 env | `LD_LIBRARY_PATH` 必须包含 venv 内 nvidia/{cudnn,cublas,cufft,cuda_runtime,cuda_nvrtc,nvjitlink,cusparse,curand,cusolver,cuda_cupti}/lib (见 `scripts/_remote_run_provider.sh`) |
@@ -162,10 +162,10 @@ def detect_runtime() -> RuntimeEnvironment: ...
 ```bash
 # 同步本地改动到远端(dev 用)
 rsync -av --exclude=venv --exclude=models --exclude=temp --exclude='__pycache__' \
-  src/ scripts/ tests/ docs/ zlx@100.103.92.95:~/Dev/projects/funasr_spk_server/
+  src/ scripts/ tests/ docs/ <user>@<dev-host>:~/Dev/projects/funasr_spk_server/
 
 # 远端跑测试
-ssh zlx@100.103.92.95 'bash -lc "cd ~/Dev/projects/funasr_spk_server && \
+ssh <user>@<dev-host> 'bash -lc "cd ~/Dev/projects/funasr_spk_server && \
   source venv/bin/activate && \
   FUNASR_QWEN3_NUM_THREADS=4 FUNASR_RUN_INTEGRATION=1 \
   bash scripts/_remote_run_provider.sh ort_cuda new-backend-test"'

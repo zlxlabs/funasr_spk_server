@@ -30,7 +30,7 @@
 
 ### 硬件 / 环境
 
-- **机器**: cuda dev box (zlx@100.103.92.95), 8 vCPU + RTX 3060
+- **机器**: cuda dev box (<user>@<dev-host>), 8 vCPU + RTX 3060
 - **runtime**: `CudaRuntime` (FUNASR_PROFILE=cuda_dev), ORT CUDAExecutionProvider 已验证可用
 - **engine config**:
   - `qwen3.num_threads = 4` (auto 解析)
@@ -339,7 +339,7 @@ cuda ort_cuda default vs Mac sherpa `final_v12_d1.5` (README §31 数据):
 
 ```bash
 # 远端 cuda dev box
-ssh zlx@100.103.92.95
+ssh <user>@<dev-host>
 cd ~/Dev/projects/funasr_spk_server
 
 # 配 CUDA libs

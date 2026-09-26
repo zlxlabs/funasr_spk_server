@@ -1016,7 +1016,7 @@
   "wall": 297.5569669999968,
   "meta": {
     "label": "1spk-16min",
-    "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
+    "audio_path": "~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
     "wall": 295.4121434169938,
     "duration": 970.176,
     "rtf": 0.30449335318230275,

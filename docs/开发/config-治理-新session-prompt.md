@@ -139,7 +139,7 @@ def _validate_engine_runtime(config, errors):
 | 4 | `default_engine=qwen3` + 假装 CUDA 不可用 → 启动 fail-fast | unit test monkeypatch + 实测 Mac 上跑 |
 | 5 | Mac unit 测试 365 pass, 7 pre-existing fail 不变 (零回归) | `venv/bin/python -m pytest tests/unit/` |
 | 6 | Mac integration parity 通过 (含 ANE phase 3 路径) | `FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/test_qwen3_backend_coreml_ane_parity.py` |
-| 7 | 远端 cuda integration 通过 (走 dispatch + InProcPool) | `ssh zlx@100.103.92.95 ... bash scripts/_remote_pool_dispatch_integration.py` |
+| 7 | 远端 cuda integration 通过 (走 dispatch + InProcPool) | `ssh <user>@<dev-host> ... bash scripts/_remote_pool_dispatch_integration.py` |
 | 8 | 落档 + CLAUDE.md 更新 | docs/开发/ + CLAUDE.md diff |
 
 ## 不在范围内 (避免 scope creep)
@@ -179,7 +179,7 @@ grep -rn "FUNASR_QWEN3" src/core/vendor/
 - **不主动 push**, git commit 后等用户指示
 - Mac 是 production, vendor 改动必须跑 Mac integration parity (`tests/integration/test_qwen3_backend_coreml_ane_parity.py`)
 - 部署不走 docker (`project_funasr_no_docker` memory)
-- 远端 dev box CUDA: `ssh zlx@100.103.92.95`, 详见 `scripts/_remote_*.sh` 头部 LD_LIBRARY_PATH 配置
+- 远端 dev box CUDA: `ssh <user>@<dev-host>`, 详见 `scripts/_remote_*.sh` 头部 LD_LIBRARY_PATH 配置
 
 ## 远端 cuda 验证 (最后一步)
 
@@ -188,10 +188,10 @@ grep -rn "FUNASR_QWEN3" src/core/vendor/
 ```bash
 # 同步 src + scripts
 rsync -av --exclude='__pycache__' src/ scripts/ \
-  zlx@100.103.92.95:/home/zlx/Dev/projects/funasr_spk_server/
+  <user>@<dev-host>:~/Dev/projects/funasr_spk_server/
 
 # 远端跑
-ssh zlx@100.103.92.95 'cd ~/Dev/projects/funasr_spk_server && \
+ssh <user>@<dev-host> 'cd ~/Dev/projects/funasr_spk_server && \
   unset FUNASR_QWEN3_ASR_ENCODER_PROVIDER FUNASR_QWEN3_POOL_SIZE FUNASR_DEFAULT_ENGINE && \
   export FUNASR_PROFILE=cuda_dev && \
   NV=venv/lib/python3.12/site-packages/nvidia; TRT=venv/lib/python3.12/site-packages/tensorrt_libs; \

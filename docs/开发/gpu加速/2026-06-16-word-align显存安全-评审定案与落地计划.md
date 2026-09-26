@@ -28,7 +28,7 @@
 
 **3060 真机 E2E 验收（2026-06-16 实测，全通过 ✅）**
 
-dev box `100.103.92.95`（cuda_dev，funasr + CapsWriter 2864MiB 共驻 12GB 卡）：
+dev box `<dev-host>`（cuda_dev，funasr + CapsWriter 2864MiB 共驻 12GB 卡）：
 
 | 验收项 | 结果 |
 |---|---|

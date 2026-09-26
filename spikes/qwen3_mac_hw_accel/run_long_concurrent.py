@@ -18,7 +18,8 @@ from pathlib import Path
 import websockets
 
 
-PROJECT_ROOT = Path("/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server")
+# 仓库根目录，由本文件位置推导，避免硬编码某台机器的家目录路径
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EVAL = PROJECT_ROOT / "tmp_long_audio" / "eval_set"
 AUDIO_1SPK = EVAL / "audio_1spk_real.m4a"          # 16min 1 人
 AUDIO_4SPK = EVAL / "audio_4spk.m4a"               # 44min 4 人

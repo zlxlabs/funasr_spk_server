@@ -13,9 +13,9 @@
   "darwin_roots": {"user": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/0", "temp": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/T", "cache": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/C"},
   "dirhelper_suffix": "funasr-directory-ab-7c95dd78114d",
   "private_dirs": {"user": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/0/funasr-directory-ab-7c95dd78114d", "temp": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/T/funasr-directory-ab-7c95dd78114d", "cache": "/private/var/folders/q6/y6875y1j58nbdj26qxfdw09c0000gn/C/funasr-directory-ab-7c95dd78114d"},
-  "source_audio": "/Users/zhanglixing/Production/funasr_spk_server/temp/samples/4-person-example.m4a",
+  "source_audio": "~/Production/funasr_spk_server/temp/samples/4-person-example.m4a",
   "derived_audio": {"duration_sec": 60.0, "size_bytes": 1920170, "sha256": "630340cdea4a23f3f8e9b16b3aee35cbfc508ba164364d5f2ede73498990036f", "format": "wav/pcm_s16le/16000Hz/mono"},
-  "worker": {"python": "/Users/zhanglixing/Production/funasr_spk_server/venv/bin/python", "script": "src/core/worker_process.py"},
+  "worker": {"python": "~/Production/funasr_spk_server/venv/bin/python", "script": "src/core/worker_process.py"},
   "cases": [
     {
       "label": "default",
@@ -58,5 +58,5 @@
   ],
   "finding": {"default_total_sec": 13.274, "dirhelper_total_sec": 24.136, "speedup_demonstrated": false, "scope": "60-second extracted audio only; no inference for the original long task"},
   "cleanup": {"private_dirs_removed": true, "private_dirs_exists_after": false, "remote_worker_processes_remaining": false, "remote_probe_root": "/tmp/funasr-directory-ab-d7fad96a-f76b-4d59-acdc-497c3317fe84"},
-  "commands": ["ssh mac-studio 'cat /tmp/foundation_mps_path_probe_latest.json'", "ssh mac-studio 'curl -fsS -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8767/health'", "ssh mac-studio '/Users/zhanglixing/Production/funasr_spk_server/venv/bin/python /tmp/funasr-directory-ab-<uuid>/funasr_directory_ab.py --root /tmp/funasr-directory-ab-<uuid>'", "python3 -m json.tool docs/sessions/funasr-pool-recovery-20260909/evidence/directory-ab.json"]
+  "commands": ["ssh mac-studio 'cat /tmp/foundation_mps_path_probe_latest.json'", "ssh mac-studio 'curl -fsS -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8767/health'", "ssh mac-studio '~/Production/funasr_spk_server/venv/bin/python /tmp/funasr-directory-ab-<uuid>/funasr_directory_ab.py --root /tmp/funasr-directory-ab-<uuid>'", "python3 -m json.tool docs/sessions/funasr-pool-recovery-20260909/evidence/directory-ab.json"]
 }

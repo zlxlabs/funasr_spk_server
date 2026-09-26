@@ -10,7 +10,7 @@
 你接手 funasr_spk_server 的 Qwen3 引擎 Mac 硬件加速 PoC 阶段。**目标是解决双任务并发时前期 CPU 打满, GPU 长时间 0% 空等的问题**。验证多种 Mac 硬件加速路线 (CoreML/ANE/Metal), 测真实收益, 不做工程化集成。如 PoC 验证有效, 后续单独开 PR 工程化。
 
 ### 项目路径
-`/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
+`~/Dev/projects/250729_funasr_spk_server/funasr_spk_server`
 
 ### 必读 (按顺序, 用于建立 context)
 

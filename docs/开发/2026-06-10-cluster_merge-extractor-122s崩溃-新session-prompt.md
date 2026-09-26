@@ -90,8 +90,8 @@ task，但该 task 静默丢掉整层 cluster_merge**（仅 warning 日志），
   audio, _ = _load_audio_mono_16k("tests/fixtures/audio/podcast_2speakers_60s.wav")
   fn(np.tile(audio, 3), 0.0, 123.0)   # ≥123s → RuntimeError; 122s OK
   ```
-- 真实场景复跑：远端 3060（`ssh zlx@100.103.92.95`，项目
-  `/home/zlx/Dev/projects/funasr_spk_server`）跑
+- 真实场景复跑：远端 3060（`ssh <user>@<dev-host>`，项目
+  `~/Dev/projects/funasr_spk_server`）跑
   `scripts/_remote_diarize_accuracy_eval.py`，看 2spk_60min 段的
   "cluster_merge 失败" warning；或 `scripts/_remote_short_audio_matrix.py`
 - 相关代码：`src/core/qwen3/cluster_merge.py`（build_centroids / 入口）、

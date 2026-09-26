@@ -1,6 +1,6 @@
 # A 结果解析边界：实现与验证记录
 
-- Task-Id：`funasr_spk_server-20260926-A`；任务卡：`/home/zlx/.local/state/delegate/cards/funasr-reliability-0926/A-result-contract.md`。
+- Task-Id：`funasr_spk_server-20260926-A`；任务卡：`~/.local/state/delegate/cards/funasr-reliability-0926/A-result-contract.md`。
 - 业务冻结提交：`4e49d35070b49f678ea9b4692d7a39c37c49da40`；基线：`ec0b892035ff1def7e1168254b5b89622c5e7bae`；PR #12 保持 draft。
 - 风险档按 internal 处理；仓库没有 `risk-tier` 声明，需主脑提醒补声明。本报告不修改全局规则。
 

@@ -8,7 +8,7 @@
 
 ## 全量 unit 结果
 
-- 命令：`FUNASR_NOTIFICATION_ENABLED=false /home/zlx/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit`。
+- 命令：`FUNASR_NOTIFICATION_ENABLED=false ~/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit`。
 - 结果（a24）：`1101 passed, 6 skipped, 10 errors, 1 failed`。
 - 精确失败：`tests/unit/test_config_qwen3_asr_encoder_provider.py::TestBuildEngineConfigReadsConfigField::test_auto_on_macos_resolves_to_coreml_ane_fe`，`OSError`，Linux 加载 Darwin `libggml.dylib` 报 `invalid ELF header`。
 - 6 个 full encoder error：`TestCoremlAneFullOnMacos::test_macos_fe_coreml_be_mlpackage`、`TestCoremlAneFullFallback::test_linux_fallback_cpu_full`、`TestCoremlAneFullFallback::test_macos_mlpackage_missing_fallback_to_ane_fe`、`TestCoremlAneFullFallback::test_macos_no_coreml_ep_fallback_cpu`、`TestExistingBranchesUnchanged::test_coreml_ane_fe_unchanged`、`TestExistingBranchesUnchanged::test_cpu_unchanged`；均 setup `OSError`，Linux 缺 `bin/libggml.so`。

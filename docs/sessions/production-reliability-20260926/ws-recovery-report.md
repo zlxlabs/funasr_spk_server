@@ -14,11 +14,11 @@
 
 ## 验证
 
-- 定向命令（使用主仓 venv、当前工作树 cwd）：`FUNASR_NOTIFICATION_ENABLED=false /home/zlx/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit/test_i1_websocket_protocol_live.py tests/unit/test_websocket_connection_diagnostics.py tests/unit/test_websocket_task_status_batch.py tests/unit/test_ws_terminal_failure_message.py`：**37 passed**。
+- 定向命令（使用主仓 venv、当前工作树 cwd）：`FUNASR_NOTIFICATION_ENABLED=false ~/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit/test_i1_websocket_protocol_live.py tests/unit/test_websocket_connection_diagnostics.py tests/unit/test_websocket_task_status_batch.py tests/unit/test_ws_terminal_failure_message.py`：**37 passed**。
 - 日志测试先让进度、完成、失败通知和消息处理抛出带敏感标记的异常；旧实现因此有 5 项失败（含 close 日志缺少异常类/close code 的断言）。旧实现没有回显远端 close reason；新测试继续用敏感 reason 锁定此约束，并按真实 formatter 输出检查关联字段、异常类和 close code。
 - 临时 fault injection 将 batch 完成结果清空：JSON 与 SRT 两个恢复用例都按预期失败；模拟断开时取消任务：两个用例都因 `cancel_task` 被调用而失败。注入文件已删除，工作树代码未被突变。
 - `git diff --check` 通过。
-- 全量命令：`FUNASR_NOTIFICATION_ENABLED=false FUNASR_DATA_DIR=/tmp/funasr-ws-recovery-tests/data FUNASR_LOG_DIR=/tmp/funasr-ws-recovery-tests/logs TMPDIR=/tmp/funasr-ws-recovery-tests /home/zlx/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit`：**1110 passed, 6 skipped, 1 failed, 10 errors**。失败/错误集中在 Qwen3 Mac CoreML/vendor 动态库路径；主脑报告A卡基线也有相同平台类问题，本卡未改相关代码。
+- 全量命令：`FUNASR_NOTIFICATION_ENABLED=false FUNASR_DATA_DIR=/tmp/funasr-ws-recovery-tests/data FUNASR_LOG_DIR=/tmp/funasr-ws-recovery-tests/logs TMPDIR=/tmp/funasr-ws-recovery-tests ~/projects/personal/funasr_spk_server/venv/bin/python -m pytest -q tests/unit`：**1110 passed, 6 skipped, 1 failed, 10 errors**。失败/错误集中在 Qwen3 Mac CoreML/vendor 动态库路径；主脑报告A卡基线也有相同平台类问题，本卡未改相关代码。
 
 失败与错误的完整 nodeid：
 

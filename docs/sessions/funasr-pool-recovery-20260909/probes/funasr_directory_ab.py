@@ -4,7 +4,7 @@ import argparse, ctypes, hashlib, json, os, pickle, re, shutil, signal
 import subprocess, time, urllib.request, uuid, wave
 from pathlib import Path
 CONFSTR={"user":65536,"temp":65537,"cache":65538}
-PRODUCTION=Path("/Users/zhanglixing/Production/funasr_spk_server")
+PRODUCTION=Path(os.path.expanduser("~/Production/funasr_spk_server"))
 PYTHON=PRODUCTION/"venv/bin/python"
 SOURCE=PRODUCTION/"temp/samples/4-person-example.m4a"
 CASE_TIMEOUT=240

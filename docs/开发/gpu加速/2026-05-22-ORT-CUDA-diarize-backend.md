@@ -3,7 +3,7 @@
 **Date**: 2026-05-22
 **Branch**: `spike/qwen3-diarize-poc`
 **Sprint**: Qwen3 CUDA 平台适配 + ORT 直 wrap diarize backend
-**Dev box**: `vm200-i7-3060llm` (Tailscale `100.103.92.95`, RTX 3060 12G, Ubuntu 24.04, 4 vCPU)
+**Dev box**: `vm200-i7-3060llm` (Tailscale `<dev-host>`, RTX 3060 12G, Ubuntu 24.04, 4 vCPU)
 
 ## 一句话目标
 
