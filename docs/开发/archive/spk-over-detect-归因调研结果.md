@@ -120,7 +120,7 @@ cluster_durations: {
 
 ```
 cd578a886ad58e50af937238b2adcb7b0d46f925
-Author: zlx <zj1123581321@gmail.com>
+Author: <user> <zj1123581321@gmail.com>
 Date:   Fri May 15 22:42:34 2026 +0800
 
     fix(qwen3): worker 加 ffmpeg audio format 转换 + 长音频并发冒烟脚本
