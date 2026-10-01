@@ -28,11 +28,15 @@ README 只讲「是什么 + 怎么快速跑起来」，详细内容在 `docs/`�
 | 想做什么 | 看这里 |
 |---|---|
 | 📂 文档总索引 | [docs/README.md](docs/README.md) |
-| 🔌 接入客户端（WebSocket 协议 / 上传 / 输出格式 / 异步轮询 / 故障排除） | [docs/使用/客户端交互指南.md](docs/使用/客户端交互指南.md) |
+| 🔌 Protocol reference：消费方协议正本（WebSocket 协议 / 上传 / 输出格式 / 异步轮询 / 故障排除；`capabilities` / `terms` / `capability_id`） | [docs/使用/客户端交互指南.md](docs/使用/客户端交互指南.md) |
 | 🚀 部署（Mac 生产 PM2 / Linux CUDA / doctor 验收） | [docs/部署.md](docs/部署.md) |
-| 🧩 服务端协议（状态机 / 并发控制 / 消息规格） | [docs/开发/Server-Client 交互协议.md](docs/开发/Server-Client%20交互协议.md) |
+| 🧩 服务端实现细节（状态机 / 并发控制 / 消息规格） | [docs/开发/Server-Client 交互协议.md][server-protocol] |
 | ⚙️ 架构 / 配置体系 / 引擎与池 / 加新引擎 | [CLAUDE.md](CLAUDE.md) |
 | 🔧 配置项全集 | `.env.example`（env 权威）+ `config.json` |
+
+两份协议文档均使用中文文件名；检索请用 `capabilities` / `terms` / `capability_id` 等关键词，不要按 `protocol.md` 等英文文件名查找。
+
+[server-protocol]: docs/开发/Server-Client%20交互协议.md
 
 ## 架构概览
 
@@ -72,7 +76,7 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 
 最小流程：`connect → upload_request → upload_data → 等 task_complete`；批量场景用 `task_status_batch` 异步轮询。协议入口、字段表、Python 基础上传示例、输出格式、错误处理见 **[客户端交互指南](docs/使用/客户端交互指南.md)**；使用 `terms` 时还必须按指南先完成 capabilities/connected 预检。
 
-`upload_request.data.terms` 是可选的结构化术语列表。服务端会规范化并校验；空列表不改变识别行为。有效术语不会读取普通缓存，以免把带术语结果误当成普通结果；响应 metadata 会回显 `terms_count` 与引擎相关的 `context_applied`。FunASR hotword、Qwen3 context、缓存与错误契约见[客户端指南](docs/使用/客户端交互指南.md)和[服务端协议](docs/开发/Server-Client%20交互协议.md)。
+`upload_request.data.terms` 是可选的结构化术语列表。服务端会规范化并校验；空列表不改变识别行为。有效术语不会读取普通缓存，以免把带术语结果误当成普通结果；响应 metadata 会回显 `terms_count` 与引擎相关的 `context_applied`。FunASR hotword、Qwen3 context、缓存与错误契约见[客户端指南](docs/使用/客户端交互指南.md)和[服务端协议][server-protocol]。
 
 上传前可用 `GET /capabilities` 确认当前引擎是否声明 `features.terms=true`；WebSocket `connected` 消息中的 `capabilities` 应与之完全一致，缺失或 `capability_id` 不一致时客户端应 fail-closed，不发送术语请求。
 
