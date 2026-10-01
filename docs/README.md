@@ -6,7 +6,7 @@
 
 | 文档 | 主题 |
 |---|---|
-| [客户端交互指南](使用/客户端交互指南.md) | WebSocket 协议、`terms` 术语、能力协商、单文件/分片上传、**异步轮询契约（批量 `task_status_batch`，根治 300s 超时）**、Python 客户端完整示例 |
+| [客户端交互指南](使用/客户端交互指南.md) | **消费方协议正本**（Protocol reference）：WebSocket 协议、`capabilities` / `terms` / `capability_id`、单文件/分片上传、**异步轮询契约（批量 `task_status_batch`，根治 300s 超时）**、Python 客户端完整示例 |
 | [部署指南](部署.md) | Mac `mac_prod`/FunASR 生产 (PM2)、Linux CUDA 支持路径、`doctor --json` 验收 |
 
 ## 🛠 开发（给改源码的人看）
@@ -15,12 +15,14 @@
 
 | 文档 | 主题 |
 |---|---|
-| [Server-Client 交互协议](开发/Server-Client%20交互协议.md) | 服务端视角：能力契约、`terms`、任务状态机、并发控制、错误重试、`engine` 字段路由、异步轮询契约（`task_status_batch` 消息规格） |
+| [Server-Client 交互协议][server-protocol] | 服务端视角：能力契约、`terms`、任务状态机、并发控制、错误重试、`engine` 字段路由、异步轮询契约（`task_status_batch` 消息规格） |
 | [WebSocket大文件传输最佳实践](开发/WebSocket大文件传输最佳实践.md) | 大文件分片上传方案 + 客户端实现参考 |
 | [兼容性开发文档](开发/FunASR音频转文本服务器兼容性开发文档.md) | FunASR 生产路径详解（Qwen3 路径见 CLAUDE.md） |
 | [可观测性仪表盘设计](开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md) | `/health` + `/metrics`(Prometheus) + `/` 状态页：架构、指标清单、A5 安全、测试加固（CEO+Eng+codex 三重审稿） |
 | [gpu加速/](开发/gpu加速/) | MPS 加速实施记录 + 长音频补丁方案（3 篇按日期） |
 | [archive/](开发/archive/) | 历史 PR/PoC 决策档案：ASR 引擎抽象计划、Qwen3 Mac 加速 PoC、PR4 长音频校对稿对比等 |
+
+[server-protocol]: 开发/Server-Client%20交互协议.md
 
 ## 📚 背景资料
 
