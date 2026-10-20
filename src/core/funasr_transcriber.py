@@ -5,6 +5,7 @@ import os
 import time
 import asyncio
 import json
+import tempfile
 import threading
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timedelta
@@ -146,15 +147,38 @@ class FunASRTranscriber:
     ) -> Union[TranscriptionResult, str, Dict[str, Any]]:
         """转录音频文件 - 使用与测试脚本相同的方法
 
-        options: per-request 转录选项（由 task_manager 统一透传）；terms 只在本层
-        space-join 为 FunASR hotword，options 本身不进入 FunASR 任务文件。引擎不消费 language；diarize=False 的
+        options: per-request 转录选项（由 task_manager 统一透传）；非空 terms 写入
+        每任务唯一临时 .txt（每行一个术语原样）并把该路径作为 FunASR hotword，
+        转写结束（成功或失败）删除。options 本身不进入 FunASR 任务文件。引擎不消费 language；diarize=False 的
         语义由 serve 层出口投影实现（D4: cam++ 提取无 per-call 开关，照算后
         投影抹 speaker），引擎内接受后忽略。
         """
         if not self.is_initialized:
             await self.initialize()
 
-        hotword = " ".join(options.terms) if options else ""
+        # funasr 1.2.7 generate_hotwords_list：空格拼接会被当成 url / .txt 路径 / 按空格拆词。
+        # 改写每任务 .txt，路径在 generate 期间必须存在。
+        hotword = ""
+        hotword_path = None
+        terms = list(options.terms) if options else []
+        if terms:
+            try:
+                fd, hotword_path = tempfile.mkstemp(
+                    prefix=f"funasr-hotword-{task_id}-",
+                    suffix=".txt",
+                )
+                os.close(fd)
+                Path(hotword_path).write_text(
+                    "\n".join(terms) + "\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                logger.error("FUNASR-HOTWORD-FILE write failed task_id={}", task_id)
+                if hotword_path:
+                    os.unlink(hotword_path)
+                    hotword_path = None
+                raise
+            hotword = hotword_path
         
         start_time = time.time()
         original_path = audio_path
@@ -375,6 +399,17 @@ class FunASRTranscriber:
         except Exception as e:
             logger.error(f"转录失败: {e}")
             raise Exception(f"转录失败: {str(e)}")
+        finally:
+            if hotword_path:
+                try:
+                    os.unlink(hotword_path)
+                except OSError as err:
+                    logger.error(
+                        "FUNASR-HOTWORD-FILE cleanup failed task_id={} err={}",
+                        task_id,
+                        err,
+                    )
+                    raise
     
     def _validated_funasr_sentences(
         self,
