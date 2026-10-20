@@ -16,6 +16,7 @@ from pathlib import Path
 os.environ.setdefault("FUNASR_NOTIFICATION_ENABLED", "false")
 
 import httpx
+import pytest
 from loguru import logger
 
 ROOT = Path(__file__).resolve().parents[2]

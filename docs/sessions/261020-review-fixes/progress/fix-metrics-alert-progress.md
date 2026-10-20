@@ -36,3 +36,10 @@
   `setdefault("FUNASR_NOTIFICATION_ENABLED","false")` 仅在未设置时兜底，不覆盖
   已有 webhook 环境。否决改 conftest / run_checks.sh（越界）。
 - **下一步唯一动作**：scope check 后 commit+push，写报告。
+
+## 里程碑 4：补回误删的 pytest 导入
+
+- **当前阶段**：verifying。
+- **本段结论**：收尾清理时把 `import pytest` 当未使用删掉，`@pytest.fixture` 收集期 NameError。已补回，窄测 4 passed。
+- **关键决策与已否决方案**：无。不把 fixture 改成手写 setup 来「去掉 pytest 依赖」。
+- **下一步唯一动作**：再 commit+push。
