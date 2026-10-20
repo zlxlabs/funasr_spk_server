@@ -840,8 +840,26 @@ class Qwen3DiarizeTranscriber:
                 ),
             )
 
-            # progress 在等待时定期报(简化: gather 完成时直接跳到 80)
-            asr_result, turns = await asyncio.gather(asr_future, diarize_future)
+            # 必须等两路都结束再抛：gather 默认一路失败即抛，另一路 executor
+            # 仍占用 engine；Qwen3InProcPool.finally 随即归还 tx，下一任务与
+            # 孤儿线程并发使用同一 llama 上下文。return_exceptions 收齐后再抛
+            # 首个异常，类型与消息保持原样。
+            gathered = await asyncio.gather(
+                asr_future, diarize_future, return_exceptions=True
+            )
+            asr_result, turns = gathered
+            failures = []
+            if isinstance(asr_result, BaseException):
+                failures.append(("asr", asr_result))
+            if isinstance(turns, BaseException):
+                failures.append(("diarize", turns))
+            if failures:
+                for name, exc in failures:
+                    logger.error(
+                        f"[{task_id}] QWEN3-PARALLEL-BRANCH-FAILED branch={name} "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                raise failures[0][1]
         else:
             # diarize=False (D2/D5): 真跳过 diarize + speaker 后处理层, 省算力.
             # config num_speakers 此时闲置 (D7: num_speakers 本次不 per-request 化).
