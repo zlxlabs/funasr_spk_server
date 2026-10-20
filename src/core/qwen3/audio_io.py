@@ -20,7 +20,10 @@ def load_audio_mono_16k(audio_path: str) -> tuple[np.ndarray, int]:
     """
     try:
         audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
-        audio = audio[:, 0]  # 仅取第一通道
+        # 多声道取各声道平均混为单声道 — 与 librosa mono=True 及 Qwen3 ASR 侧
+        # (vendor audio.py load_audio_numpy mean(axis=1)) 的混音方式一致;
+        # 取单声道 [:, 0] 会丢掉双声道录音的右声道说话人。
+        audio = audio.mean(axis=1)
     except Exception:
         # m4a/aac/mp3 等 soundfile 不支持的格式
         import librosa

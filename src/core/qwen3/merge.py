@@ -22,8 +22,11 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from typing import Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -169,12 +172,25 @@ def merge_asr_and_diarize(asr_text: str, turns: List[dict]) -> List[Segment]:
     """按 turn 时长比例线性切分 ASR 文本.
 
     边界条件:
-      - turns 为空 / asr_text 为空 → 返回 []
+      - asr_text 为空 → 返回 []
+      - turns 为空但 asr_text 有文本 → 全文归 speaker 0 单段返回 (不丢转写),
+        打 DIARIZE-NO-TURNS WARNING。本函数无时间输入, start/end 置 0。
       - 总时长 <= 0 → 返回 []
       - 最后一个 turn 直接吃完剩余文本, 避免浮点截断丢字
     """
-    if not turns or not asr_text:
+    if not asr_text:
         return []
+
+    if not turns:
+        # diarize 无 turn (例如右声道说话人丢失/聚类失败) 但 ASR 有文本:
+        # 把全文归给单一 speaker 0 (与单说话人正常路径经 relabel 后的 label 一致),
+        # 不能静默丢弃已识别的转写 — 否则空 segments 被当成功结果缓存。
+        logger.warning(
+            "DIARIZE-NO-TURNS: turns 为空但 asr_text 有 %d 字, "
+            "全文归 speaker 0 单段返回",
+            len(asr_text),
+        )
+        return [Segment(start=0.0, end=0.0, speaker=0, text=asr_text)]
 
     # 按 start 时间排序 (sherpa 已经排好,这里防御)
     turns_sorted = sorted(turns, key=lambda t: t["start"])
@@ -274,8 +290,25 @@ def merge_asr_chunks_and_diarize(chunks: Iterable, turns: List[dict]) -> List[Se
         [c for c in chunks if getattr(c, "text", "")],
         key=lambda c: (float(getattr(c, "start", 0.0)), float(getattr(c, "end", 0.0))),
     )
-    if not chunks_sorted or not turns:
+    if not chunks_sorted:
         return []
+
+    if not turns:
+        # diarize 无 turn 但 ASR chunks 有文本: 每个 chunk 归 speaker 0, 时间取
+        # chunk 起止, 不丢转写 (与 merge_asr_and_diarize 的无 turn 分支同一策略)。
+        logger.warning(
+            "DIARIZE-NO-TURNS: turns 为空, %d 个非空 ASR chunk 全归 speaker 0",
+            len(chunks_sorted),
+        )
+        return [
+            Segment(
+                start=round(float(c.start), 2),
+                end=round(float(c.end), 2),
+                speaker=0,
+                text=str(c.text),
+            )
+            for c in chunks_sorted
+        ]
 
     turns_sorted = sorted(turns, key=lambda t: t["start"])
     segments: List[Segment] = []
