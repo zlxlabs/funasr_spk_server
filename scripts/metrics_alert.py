@@ -5,9 +5,13 @@
 内嵌方案做不到)。纯逻辑在 src/observability/alerting.py (已单测), 本文件只是薄壳:
 HTTP 抓取 + 复用 src/utils/notification.send_custom_notification 发送 + state 落盘。
 
-用法 (单次执行, 退出码 0=正常):
+用法 (单次执行):
     venv/bin/python scripts/metrics_alert.py
+    venv/bin/python scripts/metrics_alert.py --selftest
 launchd 用 StartInterval 周期拉起即可 (见 docs/部署.md 告警节)。
+
+退出码: 0=无待发或全部送达; 非 0=有告警未送达 / 通知未启用 / selftest 失败。
+发送失败不写入已告警 state, 下轮继续重发 (fail-loud, 不靠静默期吞掉)。
 
 开关: config.observability.alert_enabled (env FUNASR_ALERT_ENABLED=true)。未启用直接退出。
 阈值: alert_queue_saturation_ratio / alert_error_surge_threshold / alert_cooldown_seconds。
@@ -15,7 +19,9 @@ state: 默认落在 DB 同目录 alert_state.json, env FUNASR_ALERT_STATE_PATH �
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
+import copy
 import os
 import sys
 import time
@@ -88,13 +94,77 @@ def probe_once(base: str, token, timeout: float) -> dict:
     return build_probe(health_ok=health_ok, health_body=health_body, metrics_text=metrics_text)
 
 
-async def _send_all(alerts: list[dict]) -> None:
-    """逐条发企微 (复用 notification 的 webhook/重试/设备标识)。"""
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """解析命令行。argv=None 时用 sys.argv[1:]。"""
+    parser = argparse.ArgumentParser(
+        description="可观测性告警: 拉 /health+/metrics, 超阈值发企微"
+    )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="发一条测试通知后退出; 失败退出码非 0",
+    )
+    return parser.parse_args(argv)
+
+
+async def _selftest_send() -> int:
+    """发一条 selftest 通知。成功返回 0, 未送达返回非 0。"""
+    ok = await send_custom_notification(
+        "🔔 FunASR 告警 selftest",
+        "metrics_alert --selftest",
+    )
+    if not ok:
+        logger.error("ALERT-SEND-FAILED selftest 通知未送达")
+        return 1
+    logger.info("selftest 通知已送达")
+    return 0
+
+
+async def _send_all(alerts: list[dict]) -> set[str]:
+    """逐条发企微, 返回成功送达的 key。失败打 ALERT-SEND-FAILED, 不吞异常。"""
+    sent: set[str] = set()
     for a in alerts:
-        await send_custom_notification(a["title"], a["body"])
+        ok = await send_custom_notification(a["title"], a["body"])
+        if ok:
+            sent.add(a["key"])
+        else:
+            logger.error(f"ALERT-SEND-FAILED key={a['key']} title={a['title']}")
+    return sent
 
 
-def main() -> int:
+def _state_with_only_sent(
+    prev_state: dict,
+    evaluated_state: dict,
+    alerts: list[dict],
+    sent_keys: set[str],
+) -> dict:
+    """evaluated_state 是「假设全部送达」的下一拍; 未送达的 key 回退 prev 以便下轮重发。"""
+    new_state = copy.deepcopy(evaluated_state)
+    prev_active = prev_state.get("active", {})
+    new_active = new_state.setdefault("active", {})
+    for a in alerts:
+        key = a["key"]
+        if key in sent_keys:
+            continue
+        if key in prev_active:
+            new_active[key] = copy.deepcopy(prev_active[key])
+        else:
+            new_active.pop(key, None)
+        # 事件型 error_surge 靠 baseline 判定增量; 未送达则不推进, 否则下轮不再重发。
+        if key == "error_surge":
+            if "error_total_seen" in prev_state:
+                new_state["error_total_seen"] = prev_state["error_total_seen"]
+            else:
+                new_state.pop("error_total_seen", None)
+    return new_state
+
+
+def main(argv: list[str] | None = None) -> int:
+    """入口。先发送, 只把送达成功的告警写入 state; 任一失败则非 0。"""
+    args = _parse_args(argv)
+    if args.selftest:
+        return asyncio.run(_selftest_send())
+
     obs = config.observability
     if not obs.alert_enabled:
         logger.info("告警未启用 (alert_enabled=false), 跳过。")
@@ -113,14 +183,26 @@ def main() -> int:
     result = evaluate_alerts(
         probe=probe, prev_state=prev_state, thresholds=thresholds, now_ts=time.time()
     )
-    save_state(state_path, result["state"])
 
     alerts = result["alerts"]
+    sent_keys: set[str] = set()
     if alerts:
         logger.warning(f"触发 {len(alerts)} 条告警: {[a['key'] for a in alerts]}")
-        asyncio.run(_send_all(alerts))
+        sent_keys = asyncio.run(_send_all(alerts))
     else:
         logger.debug("本轮无告警。")
+
+    save_state(
+        state_path,
+        _state_with_only_sent(prev_state, result["state"], alerts, sent_keys),
+    )
+
+    missed = [a["key"] for a in alerts if a["key"] not in sent_keys]
+    if missed:
+        logger.error(
+            f"ALERT-SEND-FAILED {len(missed)}/{len(alerts)} 条告警未送达, 本轮不记已告警"
+        )
+        return 1
     return 0
 
 
