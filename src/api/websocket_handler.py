@@ -25,6 +25,7 @@ import hashlib
 import tempfile
 import os
 import re
+import shutil
 import time
 import uuid
 from pydantic import ValidationError
@@ -36,6 +37,9 @@ from src.core.runtime import detect_runtime
 # 长音频 JSON 50 份单帧可能数 MB，靠"client 把已完成 id 移出轮询集、每 result 只发一次"摊平。
 # 50 是起步硬上限，实测帧过大再降。
 TASK_STATUS_BATCH_MAX = 50
+
+# 单次 WebSocket 发送的最长等待；超时即关闭慢客户端，避免阻塞 task worker。
+WS_SEND_TIMEOUT_SECONDS = 10.0
 
 
 def _invalid_terms_reason(validation_error: ValidationError) -> Optional[str]:
@@ -701,9 +705,34 @@ class WebSocketHandler:
             del self.task_connections[task_id]
     
     async def _send_message(self, websocket: WebSocketServerProtocol, msg_type: str, data: dict):
-        """发送消息"""
+        """限时发送消息；发送超时后关闭慢连接并解除其所有任务关联。"""
         message = WebSocketMessage(type=msg_type, data=data)
-        await websocket.send(message.model_dump_json())
+        try:
+            await asyncio.wait_for(
+                websocket.send(message.model_dump_json()), timeout=WS_SEND_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            connection_ids = [
+                connection_id
+                for connection_id, connected_websocket in self.connections.items()
+                if connected_websocket is websocket
+            ]
+            connection_ref = (
+                self._connection_log_ref(connection_ids[0]) if connection_ids else "unregistered"
+            )
+            logger.warning(
+                "WS-SEND-TIMEOUT connection_ref={} message_type={} timeout_seconds={}",
+                connection_ref,
+                msg_type,
+                WS_SEND_TIMEOUT_SECONDS,
+            )
+            try:
+                # websockets 12 明确不建议单独取消 send；close 会在有限 close_timeout 后中止 TCP。
+                await websocket.close()
+            finally:
+                for connection_id in connection_ids:
+                    self._cleanup_connection(connection_id)
+            raise
     
     async def _send_error(self, websocket: WebSocketServerProtocol, error_type: str, message: str):
         """发送错误消息"""
@@ -750,6 +779,7 @@ class WebSocketHandler:
             temp_file = tempfile.NamedTemporaryFile(delete=False)
             
             # 创建上传会话
+            created_at = time.time()
             session = {
                 "task_id": task_id,
                 "file_name": request.file_name,
@@ -778,7 +808,8 @@ class WebSocketHandler:
                 # 高负载止血: session 状态机 + TTL 时间戳
                 # state: uploading → (收齐) ready → (提交成功) submitted；queue_full 时回到 ready 供重试
                 "state": "uploading",
-                "created_at": time.time(),
+                "created_at": created_at,
+                "last_activity_at": created_at,
                 # finalize 落地的最终文件路径（queue_full 重试时复用，避免重复落盘）
                 "finalized_file_path": None,
             }
@@ -821,9 +852,28 @@ class WebSocketHandler:
                 return
             
             session = self.upload_sessions[task_id]
-            
-            # 检查分片是否重复
+            if type(chunk_index) is not int or not 0 <= chunk_index < session["total_chunks"]:
+                await self._send_error(websocket, "upload_error", "分片索引超出范围或类型无效")
+                return
+
+            # 解码和验证分片数据
+            chunk_data_base64 = data.get("chunk_data")
+            if not chunk_data_base64:
+                await self._send_error(websocket, "missing_chunk_data", "缺少分片数据")
+                return
+
+            chunk_data = base64.b64decode(chunk_data_base64)
+            expected_chunk_size = session["chunk_size"]
+            if (
+                (chunk_index < session["total_chunks"] - 1 and len(chunk_data) != expected_chunk_size)
+                or (chunk_index == session["total_chunks"] - 1 and len(chunk_data) > expected_chunk_size)
+            ):
+                await self._send_error(websocket, "upload_error", "分片长度与约定不符")
+                return
+
+            # 检查分片是否重复；重复的有效分片也表示该会话仍有客户端活动。
             if chunk_index in session["chunks_received"]:
+                session["last_activity_at"] = time.time()
                 await self._send_message(websocket, "chunk_received", {
                     "task_id": task_id,
                     "chunk_index": chunk_index,
@@ -831,14 +881,7 @@ class WebSocketHandler:
                     "progress": session["received_chunks"] / session["total_chunks"] * 100
                 })
                 return
-            
-            # 解码和验证分片数据
-            chunk_data_base64 = data.get("chunk_data")
-            if not chunk_data_base64:
-                await self._send_error(websocket, "missing_chunk_data", "缺少分片数据")
-                return
-            
-            chunk_data = base64.b64decode(chunk_data_base64)
+
             chunk_hash = hashlib.md5(chunk_data).hexdigest()
             
             # 验证分片哈希
@@ -856,6 +899,7 @@ class WebSocketHandler:
             # 更新会话状态
             session["chunks_received"].add(chunk_index)
             session["received_chunks"] += 1
+            session["last_activity_at"] = time.time()
             
             progress = session["received_chunks"] / session["total_chunks"] * 100
             
@@ -882,12 +926,18 @@ class WebSocketHandler:
         """完成分片上传"""
         try:
             session = self.upload_sessions[task_id]
-            
+            session["last_activity_at"] = time.time()
+            session["state"] = "finalizing"
+
             logger.info(f"完成分片上传: {task_id}, 验证文件完整性...")
-            
-            # 验证完整文件哈希
-            file_hash = self._calculate_file_hash(session["temp_file_path"])
+
+            # 将流式 MD5 移出事件循环，避免大文件校验阻塞所有 WebSocket 连接。
+            loop = asyncio.get_running_loop()
+            file_hash = await loop.run_in_executor(
+                None, self._calculate_file_hash, session["temp_file_path"]
+            )
             if file_hash != session["file_hash"]:
+                await self._cleanup_upload_session(task_id, delete_finalized=True)
                 await self._send_error(websocket, "file_hash_mismatch", "文件完整性校验失败")
                 return
             
@@ -954,15 +1004,20 @@ class WebSocketHandler:
                         })
                         return
             
-            # 移动文件到最终位置（queue_full 重试时复用已落地文件，不重复落盘）
-            from src.utils.file_utils import save_uploaded_file
-
+            # 流式复制到内容寻址位置，避免将整个上传文件读入内存。
             file_path = session.get("finalized_file_path")
             if not (file_path and os.path.exists(file_path)):
-                with open(session["temp_file_path"], "rb") as f:
-                    file_data = f.read()
-                file_path, _ = await save_uploaded_file(file_data, session["file_name"])
+                from src.utils.file_utils import get_file_extension
+
+                os.makedirs(config.server.upload_dir, exist_ok=True)
+                file_path = os.path.join(
+                    config.server.upload_dir,
+                    f"{file_hash}{get_file_extension(session['file_name'])}",
+                )
                 session["finalized_file_path"] = file_path
+                await loop.run_in_executor(
+                    None, shutil.copyfile, session["temp_file_path"], file_path
+                )
 
             request = session.get("request")
             if request is None:
@@ -992,6 +1047,7 @@ class WebSocketHandler:
                 # 准入控制拒绝：保留 session + 已落地文件，客户端据 retry_after 退避后
                 # 发 finalize_upload 重试（不重传大文件）。self.tasks 回滚已在 task_manager 完成。
                 session["state"] = "ready"
+                session["last_activity_at"] = time.time()
                 logger.warning(f"分片任务入队被拒(queue_full): {task_id}, retry_after={qe.retry_after}s")
                 await self._send_message(websocket, "queue_full", {
                     "task_id": task_id,
@@ -1063,7 +1119,10 @@ class WebSocketHandler:
         now = time.time()
         for task_id in list(self.upload_sessions.keys()):
             sess = self.upload_sessions[task_id]
-            if now - sess.get("created_at", now) > ttl:
+            if sess.get("state") == "finalizing":
+                continue
+            last_activity_at = sess.get("last_activity_at", sess.get("created_at", now))
+            if now - last_activity_at > ttl:
                 self._remove_session_files(sess, delete_finalized=True)
                 del self.upload_sessions[task_id]
                 logger.info(f"清理遗弃上传会话(TTL): {task_id}")
