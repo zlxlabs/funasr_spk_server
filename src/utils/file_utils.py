@@ -1,7 +1,9 @@
 """
 文件处理工具模块
 """
+import math
 import os
+import re
 import time
 import hashlib
 import aiofiles
@@ -98,14 +100,74 @@ def convert_to_wav(input_path: str, output_path: Optional[str] = None) -> str:
 
 
 def get_audio_duration(file_path: str) -> float:
-    """获取音频文件时长（秒）"""
+    """通过容器、音频流元数据或 ffmpeg 解码统计获取音频时长。"""
+    def fail(stage: str, cause: Exception) -> None:
+        """记录有限长度的失败原因，并以明确异常向上报告。"""
+        detail = getattr(cause, "stderr", None)
+        if isinstance(detail, bytes):
+            reason = detail.decode(errors="replace").strip()
+        elif detail:
+            reason = str(detail).strip()
+        else:
+            reason = str(cause).strip()
+        reason = reason[-500:] or type(cause).__name__
+        message = f"音频时长探测失败（{stage}）：{reason}"
+        logger.error(
+            "AUDIO-DURATION-PROBE-FAILED path={} stage={} reason={}",
+            file_path,
+            stage,
+            reason,
+        )
+        raise RuntimeError(message) from cause
+
+    def parse_duration(value) -> Optional[float]:
+        """解析有效的非负时长；无效元数据交由下一探测来源处理。"""
+        if value is None:
+            return None
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(duration) or duration < 0:
+            return None
+        return duration
+
     try:
         probe = ffmpeg.probe(file_path)
-        duration = float(probe['format']['duration'])
+    except Exception as exc:
+        fail("ffprobe", exc)
+
+    format_info = probe.get("format") or {}
+    duration = parse_duration(format_info.get("duration"))
+    if duration is not None:
         return duration
-    except Exception as e:
-        logger.error(f"获取音频时长失败: {e}")
-        return 0.0
+
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            duration = parse_duration(stream.get("duration"))
+            if duration is not None:
+                return duration
+
+    try:
+        _, stderr = (
+            ffmpeg.input(file_path)
+            .output("-", format="null")
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    except Exception as exc:
+        fail("ffmpeg 解码", exc)
+
+    stderr_text = (
+        stderr.decode(errors="replace") if isinstance(stderr, bytes) else str(stderr)
+    )
+    timestamps = re.findall(
+        r"\btime=((?:\d+):(?:\d{2}):(?:\d{2}(?:\.\d+)?))", stderr_text
+    )
+    if not timestamps:
+        fail("ffmpeg 解码", ValueError("解码输出中没有最终 time 时间戳"))
+
+    hours, minutes, seconds = timestamps[-1].split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
 def validate_file_size(file_size: int) -> bool:
