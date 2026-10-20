@@ -36,7 +36,7 @@ Always respond in 中文
 两个引擎并行接入生产，dispatch 走轻量函数路由（**不是 ABC 抽象**）：
 - **Dispatch**: `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 按 engine 名分支
 - **引擎选择与准入**: `upload_request.engine` 省略时使用 `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`）；显式提供时必须与实例引擎一致，否则单文件和分片请求均在 `upload_request` 阶段以 `type=error`、`data.error=upload_error` 拒绝，不接受后续文件数据/分片。该字段不是请求级路由；检查位于 `src/api/websocket_handler.py` 的上传准入及 `src/core/task_manager.py:create_task`。
-- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，跨引擎不命中；engine 维折 word_align / diarize 状态（`qwen3+wa:<lang>+nospk` 形态，见「diarize 开关」节），折维参数统一走 `database.cache_params_for(task)`（word_align 维读 `options.word_align` 非 config，且 `output_format=srt` 强制降 +wa；写入用 `cache_save_engine_for` 对齐失败时降 +wa 防毒化；跨引擎回退排除折维行，见 pipeline 5.5 词级时间戳节）
+- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，先精确查；`FUNASR_CACHE_CROSS_ENGINE`（默认 true）时精确未命中会回退到其他引擎的非折维行；engine 维折 word_align / diarize 状态（`qwen3+wa:<lang>+nospk` 形态，见「diarize 开关」节），折维参数统一走 `database.cache_params_for(task)`（word_align 维读 `options.word_align` 非 config，且 `output_format=srt` 强制降 +wa；写入用 `cache_save_engine_for` 对齐失败时降 +wa 防毒化；跨引擎回退排除折维行，见 pipeline 5.5 词级时间戳节）
 
 现状全貌、Runtime、池 dispatch、后处理 pipeline、diarize 开关：`docs/开发/ASR引擎架构.md`。定案 `docs/开发/2026-06-10-diarize开关API-设计定案.md`；ORT-CUDA `docs/开发/gpu加速/2026-05-22-ORT-CUDA-diarize-backend.md`；池 `docs/开发/gpu加速/2026-05-23-CUDA并发突破.md`；word_align `docs/开发/gpu加速/2026-06-16-Qwen3-word-align显存PoC与落地计划.md`、`docs/开发/gpu加速/2026-06-16-word-align显存安全-评审定案与落地计划.md`。
 

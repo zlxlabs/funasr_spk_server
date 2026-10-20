@@ -13,8 +13,8 @@
 - **FunASR**（生产稳定）: `src/core/funasr_transcriber.py`，MPS GPU 加速。canonical 为**句级** segments（引擎层不再合并）；JSON 出口在 serve 投影层 `merge_segments_view` 做同说话人相邻句合并 + `segment_merge_max_span_sec`（默认 120s）上限（issue #1）
 - **Qwen3**: `src/core/qwen3_pool_transcriber.py`（**runtime-aware 池 dispatch**, 见下文）+ `src/core/qwen3_transcriber.py`（单例）+ `src/core/qwen3/asr.py`（引擎构造）。Mac 上 frontend ONNX 走 CoreML ANE（`onnx_provider="COREML_ANE_FE"`），见 `spikes/qwen3_mac_hw_accel/SUMMARY.md`
 - **Dispatch**: `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 按 engine 名分支
-- **引擎选择优先级**: `upload_request.engine` > `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`）> `funasr`
-- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，跨引擎不命中；engine 维折 word_align / diarize 状态（`qwen3+wa:<lang>+nospk` 形态，见「diarize 开关」节），折维参数统一走 `database.cache_params_for(task)`（word_align 维读 `options.word_align` 非 config，且 `output_format=srt` 强制降 +wa；写入用 `cache_save_engine_for` 对齐失败时降 +wa 防毒化；跨引擎回退排除折维行，见 pipeline 5.5 词级时间戳节）
+- **引擎选择与准入**: 实例引擎 = `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`，缺省 `funasr`）；`upload_request.engine` 省略时用实例引擎，显式指定其他引擎在 `upload_request` 阶段以 `upload_error` 拒绝（单文件与分片一致），不是请求级路由
+- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，先精确查；`FUNASR_CACHE_CROSS_ENGINE`（默认 true）时精确未命中会回退到其他引擎的非折维行；engine 维折 word_align / diarize 状态（`qwen3+wa:<lang>+nospk` 形态，见「diarize 开关」节），折维参数统一走 `database.cache_params_for(task)`（word_align 维读 `options.word_align` 非 config，且 `output_format=srt` 强制降 +wa；写入用 `cache_save_engine_for` 对齐失败时降 +wa 防毒化；跨引擎回退排除折维行，见 pipeline 5.5 词级时间戳节）
 
 ## Runtime + Diarize backend 抽象
 
