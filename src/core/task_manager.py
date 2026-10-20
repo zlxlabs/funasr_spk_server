@@ -22,7 +22,7 @@ from src.models.schemas import (
 )
 
 
-# 终态状态集合：内存清理只清这些；非终态（PENDING/PROCESSING）永不被清。
+# 终态状态集合：终态守卫与内存清理共用，避免状态列表分散。
 _TERMINAL_STATUSES = frozenset({
     TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT,
 })
@@ -224,6 +224,17 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[TranscriptionTask]:
         """获取任务"""
         return self.tasks.get(task_id)
+
+    @staticmethod
+    def _keep_terminal_task(task: TranscriptionTask, operation: str) -> bool:
+        """终态不可逆：保留既有状态并记录被跳过的后续操作。"""
+        if task.status not in _TERMINAL_STATUSES:
+            return False
+        logger.warning(
+            f"TASK-TERMINAL-KEPT 保持任务终态: {task.task_id} "
+            f"(status={task.status.value}, operation={operation})"
+        )
+        return True
     
     async def submit_task(self, task_id: str, file_path: str):
         """提交任务到队列"""
@@ -323,6 +334,8 @@ class TaskManager:
         submit_task(提交时)+ #22 _process_task(开工前二次查, 堵错开到达重复转录)共用。
         折维 key(word_align/diarize)收拢在 cache_params_for(D4)。
         """
+        if self._keep_terminal_task(task, "缓存检查"):
+            return True
         if task.force_refresh:
             return False
         from src.core.database import cache_allowed_for
@@ -334,6 +347,8 @@ class TaskManager:
             task.file_hash, task.output_format,
             engine=cache_engine, allow_cross_engine=allow_cross, options=task.options,
         )
+        if self._keep_terminal_task(task, "缓存查询完成"):
+            return True
         if not cached_result:
             return False
         logger.info(f"使用缓存结果: {task.task_id}")
@@ -603,7 +618,7 @@ class TaskManager:
         if not task:
             return False
         
-        if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+        if task.status in _TERMINAL_STATUSES:
             return False
         
         task.status = TaskStatus.CANCELLED
@@ -659,8 +674,7 @@ class TaskManager:
             logger.error(f"任务不存在: {task_id}")
             return False
         
-        if task.status == TaskStatus.CANCELLED:
-            logger.info(f"任务已取消，跳过处理: {task_id}")
+        if self._keep_terminal_task(task, "worker 开始处理"):
             return False
         
         # 增加处理任务计数
@@ -674,7 +688,8 @@ class TaskManager:
             # 永久泄漏, codex #1)。"几乎同时到达"(多 worker 并发取出)堵不住 — 已知局限。
             try:
                 if await self._try_complete_from_cache(task):
-                    await self._maybe_delete_task_file(task)  # 命中即终态, 与正常完成一致删文件
+                    if task.status == TaskStatus.COMPLETED:
+                        await self._maybe_delete_task_file(task)  # 命中即终态, 与正常完成一致删文件
                     return False
             except Exception as e:
                 logger.warning(f"开工前查缓存失败, 降级继续转录 {task_id}: {e}")
@@ -797,6 +812,8 @@ class TaskManager:
                 word_align_error=(word_align_error_msg if task.output_format != "srt" else None),
             )
 
+            if self._keep_terminal_task(task, "转写成功"):
+                return False
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
             task.progress = 100
@@ -827,6 +844,8 @@ class TaskManager:
             # #3: 单一分类入口替代字符串匹配。错误计数按 kind 分(每次异常都记, 与终态 FAILED 解耦)
             kind = classify_error(e)
             self.record_error(kind.value)
+            if self._keep_terminal_task(task, "转写失败"):
+                return False
 
             # 更新任务状态
             task.status = TaskStatus.FAILED
