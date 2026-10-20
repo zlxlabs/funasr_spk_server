@@ -27,3 +27,9 @@
 - 本段结论：最终实现提交 `3f5242f8c9fd0421622d4a35e5dc1aa099f4235a` 在远端分支已核实；scope 检查通过，窄测 11 passed，阻塞 close 的诊断/终态相关测试 20 passed，工作树干净。
 - 关键决策与已否决方案：完整 unit 的 1 条旧测试断言 `save_uploaded_file` 调用，和流式复制修法冲突且该测试文件不在 Scope-Globs；不越界修改。基线 timeout，继承红仍未能判定；Linux 不运行 macOS parity。
 - 下一步唯一动作：主脑验收已推送卡分支，并决定旧测试适配与 macOS parity 的后续安排。
+
+## 2026-10-21：最终全量 unit 复核
+- 当前阶段：实现已推送，验收阻塞项已归档。
+- 本段结论：最终代码全量 unit 复跑为 1171 passed、6 skipped、3 failed、10 errors；除旧 `save_uploaded_file` mock 断言与 macOS 原生依赖失败外，还出现 1 条未改动的进程池工作槽分配时序失败。窄测仍为 11 passed。
+- 关键决策与已否决方案：进程池测试只在全量并发运行中失败，不修改卡外文件；本卡基线 timeout，不能把任何平台/时序红宣称为继承红。
+- 下一步唯一动作：主脑基于报告决定是否另派旧测试更新，并在 macOS 跑 FunASR parity。
