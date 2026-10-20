@@ -12,6 +12,7 @@
 mock task_manager / save_uploaded_file / db_manager 隔离。
 """
 import hashlib
+import shutil
 import time
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -62,7 +63,7 @@ def sent_types(send_msg_mock, send_err_mock):
 class TestQueueFullMapping:
     @pytest.mark.asyncio
     async def test_queue_full_finalize_retry_preserves_terms_and_reuses_file(
-        self, handler, fake_ws, tmp_path,
+        self, handler, fake_ws, tmp_path, monkeypatch,
     ):
         from src.models.schemas import FileUploadRequest, TranscribeOptions, TranscriptionTask
 
@@ -73,7 +74,9 @@ class TestQueueFullMapping:
             engine="qwen3", terms=["Alpha", "Beta"],
         )
         handler.upload_sessions[task_id]["request"] = request
-        final = tmp_path / "final.wav"
+        upload_dir = tmp_path / "uploads"
+        monkeypatch.setattr("src.core.config.config.server.upload_dir", str(upload_dir))
+        final = upload_dir / f"{request.file_hash}.wav"
         created = []
         created_tasks = []
 
@@ -87,20 +90,15 @@ class TestQueueFullMapping:
             created_tasks.append(task)
             return task
 
-        async def save_file(data, file_name):
-            final.write_bytes(data)
-            return str(final), None
-
-        saved = AsyncMock(side_effect=save_file)
         with patch("src.core.task_manager.task_manager") as tm, \
-             patch("src.utils.file_utils.save_uploaded_file", new=saved), \
+             patch("src.api.websocket_handler.shutil.copyfile", wraps=shutil.copyfile) as copied, \
              patch.object(handler, "_send_message", new=AsyncMock()), \
              patch.object(handler, "_send_error", new=AsyncMock()):
             tm.create_task = AsyncMock(side_effect=create_task)
             tm.submit_task = AsyncMock(side_effect=[
                 QueueFullError(retry_after=30, queue_size=20, max_queue_size=20), None,
             ])
-            await handler._finalize_chunked_upload(fake_ws, task_id)
+            await handler._handle_finalize_upload(fake_ws, task_id)
             assert handler.upload_sessions[task_id]["state"] == "ready"
             assert handler.upload_sessions[task_id]["terms"] == ["Alpha", "Beta"]
             await handler._handle_finalize_upload(fake_ws, task_id)
@@ -108,9 +106,10 @@ class TestQueueFullMapping:
         assert len(created) == 2
         assert created[0] is created[1]
         assert all(task.options.terms == ["Alpha", "Beta"] for task in created_tasks)
-        assert saved.await_count == 1
-        assert tm.submit_task.await_count == 2
         assert handler.upload_sessions == {}
+        assert final.read_bytes() == b"hello-world-audio"
+        assert copied.call_count == 1
+        assert tm.submit_task.await_count == 2
 
     @pytest.mark.asyncio
     async def test_queue_full_sends_queue_full_message(self, handler, fake_ws, tmp_path):

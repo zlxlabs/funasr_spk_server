@@ -33,3 +33,15 @@
 - 本段结论：最终代码全量 unit 复跑为 1171 passed、6 skipped、3 failed、10 errors；除旧 `save_uploaded_file` mock 断言与 macOS 原生依赖失败外，还出现 1 条未改动的进程池工作槽分配时序失败。窄测仍为 11 passed。
 - 关键决策与已否决方案：进程池测试只在全量并发运行中失败，不修改卡外文件；本卡基线 timeout，不能把任何平台/时序红宣称为继承红。
 - 下一步唯一动作：主脑基于报告决定是否另派旧测试更新，并在 macOS 跑 FunASR parity。
+
+## 2026-10-21：适配 finalize queue_full 重试契约测试
+- 当前阶段：主脑第二轮验收 finding 修复完成，待验证与提交。
+- 本段结论：将 queue_full retry 测试从旧 `save_uploaded_file` await_count 改为验证 executor 内拷贝只发生一次、目标文件内容可复用、terms 在重试中保留；通过真实 finalize 重试入口执行。
+- 关键决策与已否决方案：不回退生产代码到 `save_uploaded_file`，不 mock 新 copy 成果；改断言以匹配当前流式 MD5 与 `shutil.copyfile` 文件落地机制。
+- 下一步唯一动作：运行卡面两测试文件组合验收，并做最小判据注入红验。
+
+## 2026-10-21：二轮验收测试通过
+- 当前阶段：测试契约修订已完成，待 scope 检查、提交与推送。
+- 本段结论：`tests/unit/test_websocket_finalize_resilience.py` 与 `tests/unit/test_ws_robustness.py` 组合验收 21 passed；将 `copied.call_count == 1` 临时改为 `== 2` 的最小注入按预期 AssertionError 变红，恢复判据后复验仍 21 passed。
+- 关键决策与已否决方案：改为跟踪真实 executor `shutil.copyfile` 仅一次，并校验落地文件字节、重试 terms 与两次提交；不将生产实现改回 `save_uploaded_file`。
+- 下一步唯一动作：跑 Scope-Globs 检查后提交并推送测试契约更新。
