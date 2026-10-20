@@ -629,8 +629,11 @@ class TaskManager:
                 except asyncio.TimeoutError:
                     continue
                 
-                # 处理任务
-                await self._process_task(task_id)
+                # 处理任务: 可重试失败在当前 worker 内原地重跑, 不回灌有界队列
+                # (worker 就是该队列的消费者, 队列满时 put 永久阻塞 → 全体 worker 死锁)
+                while self.is_running:
+                    if not await self._process_task(task_id):
+                        break
                 
             except asyncio.CancelledError:
                 break
@@ -639,16 +642,26 @@ class TaskManager:
         
         logger.info(f"工作线程 {worker_id} 已停止")
     
-    async def _process_task(self, task_id: str):
-        """处理任务"""
+    async def _process_task(self, task_id: str) -> bool:
+        """处理任务（单次尝试）。
+
+        返回 True = 可重试失败且未超重试上限，调用方应在本 worker 内原地重跑；
+        返回 False = 已到终态（完成 / 真失败 / 取消 / 任务不存在）。
+
+        为什么不再 `await self.task_queue.put(task_id)` 重入队：worker 本身就是该有界
+        队列的消费者，队列满(max_queue_size)时 put 永久阻塞 —— 所有 worker 同时撞上
+        可重试错误就全部卡在 put 上，队列再无人消费 → 服务停转(/health 仍 200)。
+        重试改由 _worker 在当前 worker 内原地重跑，重试语义不变(retry_count 上限 /
+        funasr 模型错误重置+延迟 / 状态 / 日志 / 进度通知)，且不依赖队列容量。
+        """
         task = self.get_task(task_id)
         if not task:
             logger.error(f"任务不存在: {task_id}")
-            return
+            return False
         
         if task.status == TaskStatus.CANCELLED:
             logger.info(f"任务已取消，跳过处理: {task_id}")
-            return
+            return False
         
         # 增加处理任务计数
         async with self._queue_lock:
@@ -662,7 +675,7 @@ class TaskManager:
             try:
                 if await self._try_complete_from_cache(task):
                     await self._maybe_delete_task_file(task)  # 命中即终态, 与正常完成一致删文件
-                    return
+                    return False
             except Exception as e:
                 logger.warning(f"开工前查缓存失败, 降级继续转录 {task_id}: {e}")
 
@@ -806,6 +819,7 @@ class TaskManager:
                 f"任务完成: {task_id} (engine={task.engine}, "
                 f"diarize={task.options.diarize}, projected={fresh_projected})"
             )
+            return False
             
         except Exception as e:
             error_msg = str(e)
@@ -823,7 +837,10 @@ class TaskManager:
             if kind.retryable and task.retry_count < config.transcription.retry_times:
                 task.retry_count += 1
                 task.status = TaskStatus.PENDING
-                logger.info(f"任务重试 {task_id}: 第{task.retry_count}次")
+                logger.warning(
+                    f"TASK-RETRY-INLINE 任务重试 {task_id}: 第{task.retry_count}次 "
+                    f"(kind={kind.value}) — 当前 worker 内原地重跑, 不回灌有界队列"
+                )
 
                 # 模型相关错误尝试重置模型状态。codex #13: 仅 funasr 任务才 reset funasr —
                 # 多引擎下 qwen3 错误判 MODEL_ERROR 不该去 reset 无关引擎(白重启)。
@@ -832,7 +849,9 @@ class TaskManager:
                     # 添加短暂延迟，让模型有时间恢复
                     await asyncio.sleep(2)
 
-                await self.task_queue.put(task_id)
+                # 原地重跑: 交回 _worker 的重试循环, 不再 put 回有界队列
+                # (worker 就是该队列的消费者, 队列满时 put 会永久阻塞 → 全体 worker 死锁)
+                return True
             else:
                 # 不重试或重试次数已达上限 → 真终态 FAILED（终态化点 3）
                 self._record_terminal(TaskStatus.FAILED)
@@ -846,6 +865,7 @@ class TaskManager:
 
                 # 发送企微通知
                 await self._send_wework_notification(task, "failed")
+                return False
         finally:
             # 减少处理任务计数
             async with self._queue_lock:
