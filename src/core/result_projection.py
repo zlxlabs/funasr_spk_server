@@ -71,6 +71,8 @@ def build_result_metadata(
     }
     if word_align_error:
         md["word_align_error"] = word_align_error
+    # 只在 terms 非空且转写成功（热词已交给模型）时回显；失败路径无 metadata。
+    # FunASR 经每任务 .txt 交给 generate，Qwen3 经 context。无 terms 不写这两键。
     if engine in ("funasr", "qwen3") and options.terms:
         md["context_applied"] = True
         md["terms_count"] = len(options.terms)

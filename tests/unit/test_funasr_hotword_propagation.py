@@ -46,13 +46,22 @@ def _build_transcriber(mode, hotword_seen):
     return tx
 
 
+def _assert_hotword_arg(hotword, terms):
+    """非空 terms 必须是已删除的每任务 .txt 路径；无 terms 仍传空串。"""
+    if terms:
+        assert isinstance(hotword, str) and hotword.endswith(".txt")
+        assert not os.path.exists(hotword)
+    else:
+        assert hotword == ""
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("mode", "terms", "expected"),
-    [("pool", ["Alpha", "Beta"], "Alpha Beta"), ("pool", [], ""),
-     ("lock", ["Alpha", "Beta"], "Alpha Beta"), ("lock", [], "")],
+    ("mode", "terms"),
+    [("pool", ["Alpha", "Beta"]), ("pool", []),
+     ("lock", ["Alpha", "Beta"]), ("lock", [])],
 )
-async def test_funasr_hotword_reaches_pool_or_lock(mode, terms, expected):
+async def test_funasr_hotword_reaches_pool_or_lock(mode, terms):
     seen = []
     tx = _build_transcriber(mode, seen)
     with patch("src.core.funasr_transcriber.get_audio_duration", return_value=1.0), \
@@ -62,10 +71,11 @@ async def test_funasr_hotword_reaches_pool_or_lock(mode, terms, expected):
 
     if mode == "pool":
         call = tx.model_pool.generate_with_pool.call_args.kwargs
-        assert call["hotword"] == expected
+        _assert_hotword_arg(call["hotword"], terms)
         assert "extra_task_fields" not in call
     else:
-        assert seen == [expected]
+        assert len(seen) == 1
+        _assert_hotword_arg(seen[0], terms)
 
 
 @pytest.mark.asyncio
