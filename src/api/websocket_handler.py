@@ -16,6 +16,7 @@ from src.models.schemas import (
     TaskStatusBatchResponse,
     TaskStatus,
     ErrorResponse,
+    TranscriptionTask,
 )
 from src.core.config import config
 from src.utils.auth import verify_token
@@ -304,43 +305,48 @@ class WebSocketHandler:
                                      f"不支持的文件类型，支持: {', '.join(config.server.allowed_extensions)}")
                 return
             
-            # 检查是否为分片上传模式
+            # 检查是否为分片上传模式，并与 create_task 共用相同 engine 判定。
             upload_mode = data.get("upload_mode", "single")
-            
+            engine_error = self._upload_engine_error(request)
+
             if upload_mode == "chunked":
+                if engine_error:
+                    await self._send_error(websocket, "upload_error", engine_error)
+                    return
                 # 处理分片上传请求
                 await self._handle_chunked_upload_request(
                     websocket, connection_id, data, request=request
                 )
                 return
             
-            # 创建任务（单文件模式）
-            from src.core.task_manager import task_manager
-            task = await task_manager.create_task(request)
-            
-            # 关联任务和连接
-            if task.task_id not in self.task_connections:
-                self.task_connections[task.task_id] = set()
-            self.task_connections[task.task_id].add(connection_id)
-            
-            # 检查缓存（如果不强制刷新）
-            # cache key 含 engine; word_align / diarize 折维收拢在 cache_params_for (D4)
+            # 缓存命中只对通过 create_task 引擎校验的请求有效；无效请求仍由 create_task 拒绝。
+            engine = (request.engine or "").strip() or config.transcription.default_engine
+            from src.models.schemas import TranscribeOptions, resolve_word_align
+            options = TranscribeOptions(
+                language=request.language,
+                diarize=request.diarize,
+                terms=list(request.terms),
+                word_align=resolve_word_align(request.word_align, config.qwen3.word_align_enabled),
+            )
+
+            # cache key 含 engine; word_align / diarize 折维收拢在 cache_params (D4)
             from src.core.database import cache_allowed_for
-            if not request.force_refresh and cache_allowed_for(task.options):
-                from src.core.database import db_manager, cache_params_for
-                _ce, _allow = cache_params_for(task)
+            if not request.force_refresh and cache_allowed_for(options):
+                from src.core.database import db_manager, cache_params
+                _ce, _allow = cache_params(engine, options, output_format)
                 cached_result = await db_manager.get_cached_result(
                     request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow,
-                    options=task.options,
+                    options=options,
                 )
-                if cached_result:
-                    logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
+                if cached_result and not engine_error:
+                    cache_task_id = str(uuid.uuid4())
+                    logger.info(f"使用缓存结果（upload_request阶段）: {cache_task_id}")
 
                     # E2: 早返回出口同样组装 effective options 回显
                     # DRY(commit 1): projected 提取 + metadata 构建走共享纯函数 cache_hit_metadata
                     from src.core.result_projection import cache_hit_metadata
                     _md, _proj, _srt_ok = cache_hit_metadata(
-                        cached_result, engine=task.engine, options=task.options,
+                        cached_result, engine=engine, options=options,
                         output_format=output_format,
                     )
 
@@ -358,14 +364,21 @@ class WebSocketHandler:
                         # JSON格式
                         cached_result.metadata = _md
                         result_data = cached_result.model_dump()
-                    
+
                     if result_data:
-                        # 直接返回缓存结果
+                        # 直接返回缓存结果，不在 TaskManager 登记临时 PENDING 任务
                         await self._send_message(websocket, "task_complete", {
-                            "task_id": task.task_id,
+                            "task_id": cache_task_id,
                             "result": result_data
                         })
                         return
+
+            # 未命中缓存才创建任务并关联连接。
+            from src.core.task_manager import task_manager
+            task = await task_manager.create_task(request)
+            if task.task_id not in self.task_connections:
+                self.task_connections[task.task_id] = set()
+            self.task_connections[task.task_id].add(connection_id)
             
             # 发送响应
             await self._send_message(websocket, "upload_ready", {
@@ -388,7 +401,24 @@ class WebSocketHandler:
         except Exception as e:
             logger.error(f"处理上传请求失败: {e}")
             await self._send_error(websocket, "upload_error", str(e))
-    
+
+    def _upload_engine_error(self, request: FileUploadRequest) -> Optional[str]:
+        """复用 TaskManager.create_task 的 engine 判定，供缓存短路与分片准入共用。"""
+        server_engine = config.transcription.default_engine
+        requested = (request.engine or "").strip()
+        if requested and requested != server_engine:
+            logger.warning(
+                "UPLOAD-ENGINE-REJECTED requested_engine={} server_engine={}",
+                requested,
+                server_engine,
+            )
+            return (
+                f"Server configured with engine={server_engine!r}, "
+                f"cannot accept engine={requested!r}. "
+                f"Please omit the engine field or set it to {server_engine!r}."
+            )
+        return None
+
     async def _handle_upload_data(self, websocket: WebSocketServerProtocol, connection_id: str, data: dict):
         """处理文件数据上传"""
         try:
@@ -426,7 +456,7 @@ class WebSocketHandler:
                 return
             
             # 保存文件
-            from src.utils.file_utils import save_uploaded_file, delete_file
+            from src.utils.file_utils import save_uploaded_file
             file_path, _ = await save_uploaded_file(file_data, task.file_name)
 
             # 提交任务到队列，获取排队信息
@@ -434,9 +464,8 @@ class WebSocketHandler:
             try:
                 queue_info = await task_manager.submit_task(task_id, file_path)
             except QueueFullError as qe:
-                # 准入控制拒绝：清理已落地文件（非分片无 session 可复用，整包重传），
-                # self.tasks 回滚已在 task_manager 完成。客户端据 retry_after 退避重传。
-                await delete_file(file_path)
+                # 准入控制拒绝：task_manager 已从 tasks 回滚，统一按同 hash live 任务保护文件。
+                await task_manager._maybe_delete_task_file(task, reason="队列已满拒绝上传，")
                 logger.warning(f"单文件任务入队被拒(queue_full): {task_id}, retry_after={qe.retry_after}s")
                 await self._send_message(websocket, "queue_full", {
                     "task_id": task_id,
@@ -881,7 +910,9 @@ class WebSocketHandler:
                 from src.core.database import cache_allowed_for
                 if cache_allowed_for(_session_options):
                     from src.core.database import db_manager, cache_params
-                    _ce, _allow = cache_params(_engine_for_cache, _session_options)
+                    _ce, _allow = cache_params(
+                        _engine_for_cache, _session_options, session["output_format"]
+                    )
                     cached_result = await db_manager.get_cached_result(
                         session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
                         options=_session_options,
@@ -1046,33 +1077,57 @@ class WebSocketHandler:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     
-    def _remove_session_files(self, session: dict, delete_finalized: bool = True):
-        """删除 session 关联的磁盘文件。
+    def _has_live_task_with_hash(self, file_hash: str) -> bool:
+        """确认是否仍有 PENDING/PROCESSING 任务需要该内容寻址上传文件。"""
+        from src.core.task_manager import task_manager
 
-        delete_finalized=False 时保留已落地的最终文件（提交成功后由 task 接管其生命周期，
-        不能删，否则任务拿不到文件）。
-        """
-        keys = ["temp_file_path"]
+        return any(
+            task.file_hash == file_hash
+            and task.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
+            for task in task_manager.tasks.values()
+        )
+
+    def _remove_session_files(
+        self,
+        session: dict,
+        delete_finalized: bool = True,
+        *,
+        delete_temp: bool = True,
+    ):
+        """删除 session 文件；无 task 对象时，最终文件仅在无同 hash live task 时删除。"""
+        keys = []
+        if delete_temp:
+            keys.append("temp_file_path")
         if delete_finalized:
             keys.append("finalized_file_path")
         for key in keys:
             path = session.get(key)
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                    logger.debug(f"清理文件({key}): {path}")
-                except Exception as e:
-                    logger.error(f"清理文件失败({key}): {e}")
+            if not path or not os.path.exists(path):
+                continue
+            if key == "finalized_file_path" and self._has_live_task_with_hash(session["file_hash"]):
+                logger.debug("保留分片最终文件，还有同 hash live 任务使用: {}", path)
+                continue
+            try:
+                os.remove(path)
+                logger.debug(f"清理文件({key}): {path}")
+            except Exception as e:
+                logger.error(f"清理文件失败({key}): {e}")
 
     async def _cleanup_upload_session(self, task_id: str, delete_finalized: bool = True):
-        """清理上传会话（含磁盘文件）。
-
-        delete_finalized: 提交成功路径传 False（最终文件交给 task），
-        其余（真错误/遗弃 sweep）传 True 全清防泄漏。
-        """
+        """清理上传会话；最终文件存在 task 时统一通过 TaskManager 的共享文件守卫删除。"""
         if task_id in self.upload_sessions:
             session = self.upload_sessions[task_id]
-            self._remove_session_files(session, delete_finalized=delete_finalized)
+            self._remove_session_files(session, delete_finalized=False)
+            if delete_finalized and session.get("finalized_file_path"):
+                from src.core.task_manager import task_manager
+
+                task = task_manager.get_task(task_id)
+                if isinstance(task, TranscriptionTask) and task.file_path:
+                    await task_manager._maybe_delete_task_file(task, reason="分片会话清理，")
+                else:
+                    self._remove_session_files(
+                        session, delete_finalized=True, delete_temp=False
+                    )
             del self.upload_sessions[task_id]
             logger.debug(f"清理上传会话: {task_id}")
 
