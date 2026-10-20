@@ -896,8 +896,11 @@ class Qwen3DiarizeTranscriber:
                     extractor_fn = await loop.run_in_executor(
                         None, self._ensure_embedding_extractor_fn
                     )
-                    filtered_turns, cluster_log = apply_cluster_centroid_merge_to_turns(
-                        filtered_turns, audio_path, self, extractor_fn=extractor_fn
+                    filtered_turns, cluster_log = await loop.run_in_executor(
+                        None,
+                        lambda: apply_cluster_centroid_merge_to_turns(
+                            filtered_turns, audio_path, self, extractor_fn=extractor_fn
+                        ),
                     )
                     merge_events = [e for e in cluster_log if e.get("action", "").startswith("main_merged") or e.get("action") == "minor_to_main"]
                     if merge_events:
@@ -906,7 +909,9 @@ class Qwen3DiarizeTranscriber:
                             f"final clusters={len(set(t['speaker'] for t in filtered_turns))}"
                         )
                 except Exception as exc:
-                    logger.warning(f"[{task_id}] cluster_merge 失败, 跳过: {exc}")
+                    logger.warning(
+                        f"[{task_id}] QWEN3-CLUSTER-MERGE-FAILED cluster_merge 失败, 跳过: {exc}"
+                    )
 
             # 文本切分到 turns。优先使用 Qwen3-ASR 内部 chunk 时间窗，避免整段线性切字漂移。
             if asr_result.chunks:
