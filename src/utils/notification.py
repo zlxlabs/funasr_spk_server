@@ -92,10 +92,16 @@ def _build_message(task: TranscriptionTask, event_type: str) -> Dict[str, Any]:
     return message
 
 
-async def send_custom_notification(title: str, content: str, msg_type: str = "text"):
-    """发送自定义通知"""
+async def send_custom_notification(title: str, content: str, msg_type: str = "text") -> bool:
+    """发送自定义通知。
+
+    Returns:
+        True: 成功送达 (HTTP 200 且 errcode==0)。
+        False: 通知未启用 / 无 webhook / 发送失败。失败仍记日志。
+    现有调用方 (main.py) 忽略返回值, 行为不变。
+    """
     if not config.notification.enabled or not config.notification.webhook_url:
-        return
+        return False
     
     try:
         # 获取设备信息
@@ -120,10 +126,12 @@ async def send_custom_notification(title: str, content: str, msg_type: str = "te
                 result = response.json()
                 if result.get("errcode") == 0:
                     logger.debug("自定义通知发送成功")
-                else:
-                    logger.error(f"自定义通知失败: {result}")
-            else:
-                logger.error(f"自定义通知HTTP错误: {response.status_code}")
+                    return True
+                logger.error(f"自定义通知失败: {result}")
+                return False
+            logger.error(f"自定义通知HTTP错误: {response.status_code}")
+            return False
                 
     except Exception as e:
         logger.error(f"发送自定义通知失败: {e}")
+        return False
