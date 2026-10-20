@@ -15,3 +15,9 @@
 - 本段结论：提交 `fdc7007a178d17d986ff9c161285c78bd5fca08e` 已由 `git ls-remote` 核实；scope 检查通过；窄测 11 passed。全量 unit 为 1171 passed、6 skipped、2 failed、10 errors，其中 1 条旧 finalize 测试仍断言调用已移除的 `save_uploaded_file`，另有 Linux/macOS 原生依赖红；`scripts/run_checks.sh` 因本 worktree 无 `venv/bin/python` 未启动。
 - 关键决策与已否决方案：遵守 Scope-Globs，不改卡外旧测试来适配流式文件复制；基线 timeout，继承红未能判定；不在 Linux 伪报 FunASR parity。
 - 下一步唯一动作：由主脑验收旧测试断言是否需另卡修正，并在 macOS 补跑 parity。
+
+## 2026-10-21：避免 close 握手再次阻塞 worker
+- 当前阶段：实现补强完成，准备提交。
+- 本段结论：发送超时后不等待最长 60 秒的 WebSocket close 握手；改为立即异步发起 close，并同步清理连接关联、上抛超时。测试以阻塞的 send 和阻塞的 close 验证 `_send_message` 仍在 0.1 秒内失败。窄测 11 passed，连接诊断与终态通知测试 20 passed。
+- 关键决策与已否决方案：close 继续由 websockets 12 的协议超时机制收尾，但不让 task worker 等待它；不做无界后台清理抽象。
+- 下一步唯一动作：提交并推送该补强，复核远端分支与工作树状态。

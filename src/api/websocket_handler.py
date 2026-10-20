@@ -726,12 +726,11 @@ class WebSocketHandler:
                 msg_type,
                 WS_SEND_TIMEOUT_SECONDS,
             )
-            try:
-                # websockets 12 明确不建议单独取消 send；close 会在有限 close_timeout 后中止 TCP。
-                await websocket.close()
-            finally:
-                for connection_id in connection_ids:
-                    self._cleanup_connection(connection_id)
+            # send 已被 wait_for 取消；立即异步发起 close，避免等待握手超时再次阻塞 worker。
+            # websockets 12 的 close 按协议 close_timeout 自行结束或中止 TCP。
+            asyncio.create_task(websocket.close())
+            for connection_id in connection_ids:
+                self._cleanup_connection(connection_id)
             raise
     
     async def _send_error(self, websocket: WebSocketServerProtocol, error_type: str, message: str):

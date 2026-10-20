@@ -67,7 +67,13 @@ async def test_send_message_times_out_logs_and_cleans_associated_connection(
     async def blocked_send(_message):
         await asyncio.Event().wait()
 
+    close_gate = asyncio.Event()
+
+    async def blocked_close():
+        await close_gate.wait()
+
     websocket.send = AsyncMock(side_effect=blocked_send)
+    websocket.close = AsyncMock(side_effect=blocked_close)
     log_output = []
     sink_id = logger.add(log_output.append, format="{message}")
     started = time.monotonic()
@@ -80,11 +86,14 @@ async def test_send_message_times_out_logs_and_cleans_associated_connection(
     finally:
         logger.remove(sink_id)
 
-    assert time.monotonic() - started < 0.2
+    assert time.monotonic() - started < 0.1
+    await asyncio.sleep(0)
     websocket.close.assert_awaited_once()
     assert "conn-slow" not in handler.connections
     assert "task-slow" not in handler.task_connections
     assert any("WS-SEND-TIMEOUT" in line for line in log_output)
+    close_gate.set()
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
