@@ -1,0 +1,40 @@
+# Business-repo caller for gate-v2-disposition.yml.
+# Copy to .github/workflows/gate-disposition.yml. The reusable workflow follows
+# gate's moving v2 release tag; gate-v2-disposition resolves its implementation
+# from that tag, so no separate implementation-ref input is passed.
+name: gate-disposition
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number: { description: "pull request number", required: true, type: string }
+      primary_run_id: { description: "canonical primary run id", required: true, type: string }
+      primary_run_attempt: { description: "canonical primary run attempt", required: true, type: string }
+      finding_id: { description: "exact current-audit finding id", required: true, type: string }
+      reason: { description: "reason for the false-positive disposition", required: true, type: string }
+      disposition: { description: "false-positive or deferred", required: false, type: string }
+      counterevidence_json: { description: "counterevidence JSON for false-positive", required: false, type: string }
+      tracking_issue: { description: "same-repository issue reference for deferred", required: false, type: string }
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  disposition:
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    secrets: inherit
+    uses: zlxlabs/gate/.github/workflows/gate-v2-disposition.yml@v2
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      primary_run_id: ${{ inputs.primary_run_id }}
+      primary_run_attempt: ${{ inputs.primary_run_attempt }}
+      finding_id: ${{ inputs.finding_id }}
+      reason: ${{ inputs.reason }}
+      disposition: ${{ inputs.disposition }}
+      counterevidence_json: ${{ inputs.counterevidence_json }}
+      tracking_issue: ${{ inputs.tracking_issue }}
