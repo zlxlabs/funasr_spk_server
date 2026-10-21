@@ -47,7 +47,8 @@ def attach_words_to_segments(
     """把 MMS 词级时间戳按时间窗增量挂进现有段 (纯函数, 不动入参).
 
     词按时间落在哪个段的 [start, end] 窗就挂哪个段; 跨段边界用最大重叠时长优先;
-    词不落任何段 (与所有段重叠均 ≤ 0) → 丢弃. 段未收到词 → words 保持 None.
+    零时长词按时间点归入覆盖段. 词不落任何段 (与所有段重叠均 ≤ 0) → 丢弃;
+    段未收到词 → words 保持 None.
 
     不替换 merge_asr_chunks_and_diarize 的段边界, 只增量挂 words.
 
@@ -60,31 +61,68 @@ def attach_words_to_segments(
     """
     if not segments:
         return []
-    # 每段一个收集桶, 按段索引
-    buckets: List[Optional[List[dict]]] = [None] * len(segments)
-    for w in words or []:
+    # 段和词分别按起点排序, 用扫描指针跳过已结束的早期段; 只检查与当前词时间窗
+    # 相交的候选段. original_index 保留旧算法的并列优先级和每段内的词输入顺序.
+    sorted_segments = sorted(
+        enumerate(segments),
+        key=lambda item: (item[1].start, item[1].end, item[0]),
+    )
+    sorted_words = sorted(
+        enumerate(words or []),
+        key=lambda item: (float(item[1]["start"]), float(item[1]["end"]), item[0]),
+    )
+    buckets: List[Optional[List[tuple[int, dict]]]] = [None] * len(segments)
+    first_candidate = 0
+    for word_index, w in sorted_words:
         w_start = float(w["start"])
         w_end = float(w["end"])
+        is_point = w_start == w_end
+        while first_candidate < len(sorted_segments):
+            seg_end = sorted_segments[first_candidate][1].end
+            expired = seg_end < w_start if is_point else seg_end <= w_start
+            if not expired:
+                break
+            first_candidate += 1
+
         best_idx = -1
         best_overlap = 0.0
-        for i, seg in enumerate(segments):
+        for segment_position in range(first_candidate, len(sorted_segments)):
+            seg_idx, seg = sorted_segments[segment_position]
+            if seg.start > w_end or (not is_point and seg.start >= w_end):
+                break
+            if is_point:
+                if seg.start <= w_start <= seg.end and (best_idx < 0 or seg_idx < best_idx):
+                    best_idx = seg_idx
+                continue
             overlap = min(seg.end, w_end) - max(seg.start, w_start)
-            if overlap > best_overlap:
+            if overlap > best_overlap or (
+                overlap == best_overlap and overlap > 0 and seg_idx < best_idx
+            ):
                 best_overlap = overlap
-                best_idx = i
+                best_idx = seg_idx
         if best_idx < 0:
             continue  # 词不落任何段, 丢弃
         if buckets[best_idx] is None:
             buckets[best_idx] = []
         buckets[best_idx].append(
-            {
-                "text": w["text"],
-                "start": w_start,
-                "end": w_end,
-                "score": w.get("score"),
-            }
+            (
+                word_index,
+                {
+                    "text": w["text"],
+                    "start": w_start,
+                    "end": w_end,
+                    "score": w.get("score"),
+                },
+            )
         )
-    return [replace(seg, words=buckets[i]) for i, seg in enumerate(segments)]
+
+    attached: List[Optional[List[dict]]] = []
+    for bucket in buckets:
+        if bucket is None:
+            attached.append(None)
+        else:
+            attached.append([word for _index, word in sorted(bucket, key=lambda item: item[0])])
+    return [replace(seg, words=attached[i]) for i, seg in enumerate(segments)]
 
 
 def relabel_segments_by_duration_desc(segments: List[Segment]) -> List[Segment]:
@@ -226,7 +264,7 @@ def merge_asr_and_diarize(asr_text: str, turns: List[dict]) -> List[Segment]:
         )
         prev_char_pos = char_end
 
-    return segments
+    return sorted(segments, key=lambda seg: (seg.start, seg.end))
 
 
 def _choose_text_boundary(text: str, target: int, search: int = 18) -> int:
@@ -348,7 +386,7 @@ def merge_asr_chunks_and_diarize(chunks: Iterable, turns: List[dict]) -> List[Se
                 )
             )
 
-    return segments
+    return sorted(segments, key=lambda seg: (seg.start, seg.end))
 
 
 # ==================== silence-aware 段切点对齐 ====================

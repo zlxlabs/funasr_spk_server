@@ -637,8 +637,11 @@ def run_diarization_ort_cuda(
     if not embeddings:
         return []
 
-    # 4. FastClustering 跨 chunk 重组 global speaker
+    # 4. FastClustering 跨 chunk 重组 global speaker。sherpa 约定 <= 0 表示自动聚类，
+    # 不能将 0 / 负数传给 scipy 作为 maxclust 的固定簇数。
     emb_matrix = np.stack(embeddings).astype(np.float32)
+    if num_speakers is not None and num_speakers <= 0:
+        num_speakers = None
     cluster_labels = fast_clustering(
         emb_matrix,
         num_clusters=num_speakers,

@@ -31,6 +31,9 @@ def is_backchannel(text: str) -> bool:
 
 _QUESTION_TAIL_MAX_LEN = 14
 
+# 单独调用 drop_tiny_segments 时保留历史 0.1 秒近邻吸附；完整 guard 则透传已有 merge_gap_sec。
+_TINY_SEGMENT_DEFAULT_MAX_GAP_SEC = 0.1
+
 
 def is_question_tail(text: str) -> bool:
     """判断文本是否为短问句尾巴 (含 '对吗' / '是吧' 等 marker 且 ≤14 字).
@@ -45,13 +48,16 @@ def is_question_tail(text: str) -> bool:
 
 
 def drop_tiny_segments(
-    segments: list[dict], min_sec: float
+    segments: list[dict],
+    min_sec: float,
+    max_gap_sec: float = _TINY_SEGMENT_DEFAULT_MAX_GAP_SEC,
 ) -> tuple[list[dict], dict]:
     """合并 dur < min_sec 的微短段到时间最近邻段.
 
     Args:
         segments: ordered list of {start, end, speaker, text}.
         min_sec: 短段阈值, dur 小于此值且 text 非空才会被合并.
+        max_gap_sec: 吸附允许的最大邻段间隔; 完整 guard 复用 merge_gap_sec.
 
     Returns:
         (new_segments, stats) — stats 含 dropped_total / merged_into_prev / merged_into_next.
@@ -81,12 +87,16 @@ def drop_tiny_segments(
             target = "next"
         elif prev_seg is not None:
             target = "prev"
-        if target == "prev":
+        if target == "prev" and (
+            float(seg["start"]) - float(prev_seg["end"]) <= max_gap_sec
+        ):
             prev_seg["text"] = (prev_seg.get("text") or "") + (seg.get("text") or "")
             prev_seg["end"] = max(float(prev_seg["end"]), float(seg["end"]))
             merged_into_prev += 1
             dropped += 1
-        elif target == "next":
+        elif target == "next" and (
+            float(next_seg["start"]) - float(seg["end"]) <= max_gap_sec
+        ):
             new_next = dict(next_seg)
             new_next["text"] = (seg.get("text") or "") + (next_seg.get("text") or "")
             new_next["start"] = min(float(seg["start"]), float(next_seg["start"]))
@@ -95,6 +105,7 @@ def drop_tiny_segments(
             merged_into_next += 1
             dropped += 1
         else:
+            # 远段不吸附: 保留 tiny 段本身, 避免把邻段时间窗扩成巨段.
             out.append(seg)
     return out, {
         "dropped_total": dropped,
@@ -155,7 +166,7 @@ def apply_short_segment_guard(
         short_drop_sec: drop_tiny_segments 阈值.
         aba_max_mid_sec: aba_smoothing 中间段最大时长.
         merge_same: 是否在 ABA 后合并同 speaker.
-        merge_gap_sec: merge_consecutive_same_speaker 的 gap 阈值.
+        merge_gap_sec: 微短段吸附和 merge_consecutive_same_speaker 的最大 gap.
         max_span_sec: 合并累计跨度上限 (秒); <=0 无上限. 透传给 merge_consecutive_same_speaker.
 
     Returns:
@@ -165,7 +176,9 @@ def apply_short_segment_guard(
         return list(segments), {"enabled": False}
     cur = list(segments)
     stats: dict = {"enabled": True}
-    cur, drop_stats = drop_tiny_segments(cur, min_sec=short_drop_sec)
+    cur, drop_stats = drop_tiny_segments(
+        cur, min_sec=short_drop_sec, max_gap_sec=merge_gap_sec
+    )
     stats["drop"] = drop_stats
     cur, aba_stats = aba_smoothing(cur, max_mid_sec=aba_max_mid_sec)
     stats["aba"] = aba_stats
