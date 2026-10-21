@@ -81,6 +81,40 @@ def free_vram_mib(device: Optional[str] = None) -> Optional[int]:
         return None
 
 
+def process_vram_mib(pid: int) -> Optional[int]:
+    """读指定进程在当前 CUDA 卡上占用的显存 (MiB); 探不到返回 None.
+
+    PID 成功查询但不在 nvidia-smi 占用列表中时返回 0. 设备选择、5 秒超时
+    和失败语义与 free_vram_mib 保持一致, 供 sidecar preflight 加回其自身占用.
+    """
+    idx = _resolve_device_index()
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "-i",
+                str(idx),
+                "--query-compute-apps=pid,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_NVIDIA_SMI_TIMEOUT_SEC,
+            check=True,
+        )
+        usage_mib = 0
+        for row in out.stdout.splitlines():
+            if not row.strip():
+                continue
+            row_pid, used_mib = row.split(",", maxsplit=1)
+            if int(row_pid.strip()) == pid:
+                usage_mib += int(used_mib.strip())
+        return usage_mib
+    except Exception as exc:  # 探针失败 → 未测, 调用方按既定门控语义处理
+        logger.debug(f"[GPU-MEM-PID-PROBE-FAILED] process_vram_mib 探测失败 (返回 None): {exc}")
+        return None
+
+
 def used_vram_mib(device: Optional[str] = None) -> Optional[int]:
     """读当前进程使用的 CUDA 卡已用显存 (MiB); 探不到返回 None (不抛).
 

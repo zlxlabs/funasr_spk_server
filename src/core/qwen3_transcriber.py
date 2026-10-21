@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import time
 from typing import Any, Callable, Optional, Tuple, Union
 
@@ -59,8 +58,8 @@ from src.models.schemas import (
     WordTimestamp,
 )
 from src.core.gpu_mem import (
-    _resolve_device_index,
     free_vram_mib,
+    process_vram_mib,
     has_headroom,
     used_vram_mib,
 )
@@ -695,26 +694,11 @@ class Qwen3DiarizeTranscriber:
                 # nvidia-smi 的 free 是整卡值；热 sidecar 自己持有的显存已包含在其中，
                 # 但复用的 session 不需要再次加载这部分模型显存。只加回 sidecar PID 的
                 # 占用，不把同卡其它进程的显存误当成可用空间。
-                sidecar_process = client._proc
-                if sidecar_process is not None and sidecar_process.poll() is None:
-                    usage = subprocess.run(
-                        [
-                            "nvidia-smi",
-                            "-i",
-                            _resolve_device_index(),
-                            "--query-compute-apps=pid,used_memory",
-                            "--format=csv,noheader,nounits",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    sidecar_used_mib = 0
-                    for row in usage.stdout.splitlines():
-                        pid, used_mib = row.split(",", maxsplit=1)
-                        if int(pid.strip()) == sidecar_process.pid:
-                            sidecar_used_mib += int(used_mib.strip())
-                    free += sidecar_used_mib
+                sidecar_pid = client.running_pid
+                if sidecar_pid is not None:
+                    sidecar_used_mib = process_vram_mib(sidecar_pid)
+                    if sidecar_used_mib is not None:
+                        free += sidecar_used_mib
             if not has_headroom(free, self.word_align_preflight_free_mib):
                 logger.warning(
                     f"[{task_id}] word_align CUDA preflight 显存不足 "

@@ -8,21 +8,7 @@ Phase 2 Step 2.3 — 加 FUNASR_QWEN3_ASR_ENCODER_PROVIDER env knob (生产 esca
 
 用途: 生产环境如果 ANE 出问题, 改 env "cpu" 一键回退, 不用改代码 / 重打包
 """
-import pytest
-
 from src.core.config import Qwen3Config, Config
-
-
-@pytest.fixture
-def mock_vendor_llama_native_module(monkeypatch):
-    """Linux 配置单测使用真实 schema，但不加载 macOS 专用 llama 原生库。"""
-    import sys
-    import types
-
-    if sys.platform != "darwin":
-        llama_module = "src.core.vendor.qwen_asr_gguf.inference.llama"
-        monkeypatch.setitem(sys.modules, llama_module, types.ModuleType(llama_module))
-    import src.core.vendor.qwen_asr_gguf.inference.schema
 
 
 class TestAsrEncoderProviderField:

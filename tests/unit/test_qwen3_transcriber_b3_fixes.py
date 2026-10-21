@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
 import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -49,7 +48,6 @@ def _make_transcriber(**overrides):
 def _sidecar_client(words=None):
     """构造 sidecar 网络边界替身。"""
     client = MagicMock()
-    client._proc = None
     client.align.return_value = (
         words or [{"text": "你好", "start": 0.2, "end": 1.0, "score": -0.1}],
         {"total_windows": 1, "failed_windows": 0, "total_words": 1, "failures": []},
@@ -68,15 +66,12 @@ async def test_preflight_counts_free_vram_after_excluding_live_sidecar_usage(tmp
         wav_file.setframerate(16000)
         wav_file.writeframes(b"\x00\x00" * 32000)
     client = _sidecar_client()
-    client._proc = SimpleNamespace(pid=27182, poll=lambda: None)
+    client.running_pid = 27182
 
     with patch("src.core.qwen3_transcriber.free_vram_mib", return_value=1200), \
          patch(
-             "subprocess.run",
-             return_value=subprocess.CompletedProcess(
-                 args=[], returncode=0, stdout="27182, 4096\n", stderr=""
-             ),
-         ) as process_query, \
+             "src.core.qwen3_transcriber.process_vram_mib", return_value=4096
+         ) as process_probe, \
          patch.object(
              tx, "_ensure_word_aligner_cpu",
              return_value=SimpleNamespace(
@@ -93,7 +88,6 @@ async def test_preflight_counts_free_vram_after_excluding_live_sidecar_usage(tmp
                  )
              ),
          ), \
-         patch("src.core.qwen3_transcriber._resolve_device_index", return_value="0"), \
          patch("src.core.qwen3_transcriber.get_word_align_sidecar_client", return_value=client):
         with patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.run_asr", return_value=_asr_result()), \
@@ -111,12 +105,7 @@ async def test_preflight_counts_free_vram_after_excluding_live_sidecar_usage(tmp
             )
 
     client.align.assert_called_once()
-    process_query.assert_called_once()
-    assert process_query.call_args.args[0] == [
-        "nvidia-smi", "-i", "0", "--query-compute-apps=pid,used_memory",
-        "--format=csv,noheader,nounits",
-    ]
-    assert process_query.call_args.kwargs == {"capture_output": True, "text": True, "check": True}
+    process_probe.assert_called_once_with(27182)
 
 
 @pytest.mark.asyncio
