@@ -51,15 +51,19 @@ def _pick_cuts(
     hard_cuts = 0
     prev = seg.start
     for i in range(1, n):
+        remaining_pieces = n - i
+        # 保证当前片不超过 max_dur，同时给剩余片保留足够容量，并满足 min_dur。
+        lower = max(prev + min_dur, seg.end - max_dur * remaining_pieces)
+        upper = min(prev + max_dur, seg.end - min_dur * remaining_pieces)
+        if lower > upper + 1e-9:
+            break
         target = seg.start + dur * i / n
-        viable = [c for c in sorted_cands if prev + min_dur <= c <= seg.end - min_dur]
+        viable = [c for c in sorted_cands if lower - 1e-9 <= c <= upper + 1e-9]
         if viable:
             cut = min(viable, key=lambda c: abs(c - target))
         else:
-            # 无候选 → 硬切目标点 (clamp 进 [prev+min_dur, end-min_dur])
-            cut = min(max(target, prev + min_dur), seg.end - min_dur)
-            if cut <= prev + min_dur - 1e-9:
-                continue  # 剩余空间不足一个 min_dur, 放弃本切点
+            # 候选静音/词隙都越过 max_dur 安全窗时，硬切到可行边界。
+            cut = min(max(target, lower), upper)
             hard_cuts += 1
         if cut - prev < min_dur - 1e-9:
             continue

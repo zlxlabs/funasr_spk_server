@@ -142,7 +142,7 @@ def apply_short_segment_guard(
     aba_max_mid_sec: float = 1.5,
     merge_same: bool = True,
     merge_gap_sec: float = 0.05,
-    max_span_sec: float = 0.0,
+    max_span_sec: float = 120.0,
 ) -> tuple[list[dict], dict]:
     """short-segment guard 完整 pipeline 入口.
 
@@ -156,7 +156,8 @@ def apply_short_segment_guard(
         aba_max_mid_sec: aba_smoothing 中间段最大时长.
         merge_same: 是否在 ABA 后合并同 speaker.
         merge_gap_sec: merge_consecutive_same_speaker 的 gap 阈值.
-        max_span_sec: 合并累计跨度上限 (秒); <=0 无上限. 透传给 merge_consecutive_same_speaker.
+        max_span_sec: 合并累计跨度上限 (秒), 默认 120 秒; <=0 显式表示无上限.
+            透传给 merge_consecutive_same_speaker.
 
     Returns:
         (new_segments, stats) — stats 含各阶段子 stats + enabled flag.
@@ -180,14 +181,14 @@ def apply_short_segment_guard(
 def merge_consecutive_same_speaker(
     segments: list[dict],
     merge_gap_sec: float = 0.05,
-    max_span_sec: float = 0.0,
+    max_span_sec: float = 120.0,
 ) -> tuple[list[dict], int]:
     """合并相邻同 speaker + gap ≤ merge_gap_sec 的连续段, 减少碎片.
 
     Args:
         segments: ordered list of {start, end, speaker, text}.
         merge_gap_sec: 允许合并的最大 gap, 超过则视为独立段.
-        max_span_sec: 合并后累计跨度上限 (秒). <=0 不设上限 (默认, 保持历史行为);
+        max_span_sec: 合并后累计跨度上限 (秒), 默认 120 秒; 显式 <=0 时不设上限;
             >0 时 next.end - prev.start 超限则在段边界断开, 防单人独白滚成巨段.
 
     Returns:
