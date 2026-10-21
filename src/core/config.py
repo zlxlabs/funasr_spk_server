@@ -654,7 +654,9 @@ class Config(BaseModel):
                 try:
                     config_data["qwen3"]["num_speakers"] = int(_s)
                 except ValueError:
-                    logger.error(f"FUNASR_QWEN3_NUM_SPEAKERS 必须是整数或 auto/none/空, 当前: {_num_spk_env!r}")
+                    raise ValueError(
+                        "环境变量 FUNASR_QWEN3_NUM_SPEAKERS 转换失败: 必须是整数或 auto/none/空"
+                    ) from None
 
         # ==================== 数据库配置 ====================
         # 数据库路径由 FUNASR_DATA_DIR 构建
@@ -691,10 +693,8 @@ class Config(BaseModel):
         if value is not None:
             try:
                 config_dict[key] = converter(value) if converter else value
-                # 配置加载阶段不输出日志,避免影响日志系统初始化
-            except Exception as e:
-                # 错误仍需要输出
-                logger.error(f"环境变量 {env_var} 转换失败: {e}")
+            except Exception:
+                raise ValueError(f"环境变量 {env_var} 转换失败") from None
 
     @staticmethod
     def _parse_bool(value: str) -> bool:
