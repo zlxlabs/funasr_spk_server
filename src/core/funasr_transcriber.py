@@ -425,7 +425,9 @@ class FunASRTranscriber:
 
         if isinstance(result, list):
             if not result:
-                invalid("empty result list")
+                if log_empty:
+                    logger.warning("FUNASR-EMPTY-RESULT: task_id={}", task_id or "unknown")
+                return []
             result_data = result[0]
         elif isinstance(result, dict):
             result_data = result
@@ -539,14 +541,12 @@ class FunASRTranscriber:
         return "\n".join(srt_lines)
 
     def _ms_to_srt_time(self, milliseconds: int) -> str:
-        """将毫秒转换为SRT时间格式 (HH:MM:SS,mmm)"""
-        seconds = milliseconds / 1000
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        ms = int((seconds % 1) * 1000)
-        
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+        """将毫秒四舍五入为整数后转换成 SRT 时间格式。"""
+        total_ms = round(milliseconds)
+        hours, remainder = divmod(total_ms, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        seconds, ms = divmod(remainder, 1_000)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
 
 
 # 全局转录器实例（延迟初始化）

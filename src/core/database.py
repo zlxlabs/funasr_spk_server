@@ -10,7 +10,7 @@ PR1 变更：
 """
 import aiosqlite
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from pathlib import Path
 from loguru import logger
@@ -519,15 +519,12 @@ class DatabaseManager:
 
         每小时随 main._periodic_cleanup 调一次, 是防无限增长的兜底, 非实时硬限。
 
-        ⚠️ 时间戳格式:DB 的 created_at/accessed_at 由 SQLite CURRENT_TIMESTAMP 写入,
-        格式是空格分隔(`2026-06-17 12:00:00`)。比较 cutoff 必须用同格式
-        (`strftime("%Y-%m-%d %H:%M:%S")`), 不能用 Python isoformat() 的 `T` 分隔——
-        字符串比较下 `'T'(0x54) > ' '(0x20)` 会把 cutoff 同日、时间更晚(应保留)的行误删。
+        ⚠️ 时间戳由 SQLite CURRENT_TIMESTAMP 按 UTC 写入；cutoff 也必须按 UTC 计算，
+        再格式化为空格分隔的 `YYYY-MM-DD HH:MM:SS`，不能用本地时区或 Python isoformat()。
         """
         try:
-            cutoff_date = datetime.now() - timedelta(days=config.database.max_cache_days)
-            # 与 DB CURRENT_TIMESTAMP 同格式(空格分隔), 见上方 docstring
-            cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
+            cutoff_utc = datetime.now(timezone.utc) - timedelta(days=config.database.max_cache_days)
+            cutoff_str = cutoff_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
             max_count = config.database.max_cache_count
 
             async with aiosqlite.connect(self.db_path) as db:
@@ -653,13 +650,12 @@ class DatabaseManager:
         return "\n".join(srt_lines)
 
     def _ms_to_srt_time(self, milliseconds: int) -> str:
-        """将毫秒转换为 SRT 时间格式 (HH:MM:SS,mmm)"""
-        seconds = milliseconds / 1000
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        ms = int((seconds % 1) * 1000)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+        """将毫秒四舍五入为整数后转换成 SRT 时间格式。"""
+        total_ms = round(milliseconds)
+        hours, remainder = divmod(total_ms, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        seconds, ms = divmod(remainder, 1_000)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
 
 
 # 全局数据库管理器实例

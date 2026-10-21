@@ -97,7 +97,7 @@ def check_requested_engine(requested: Optional[str], server_engine: str) -> Opti
 
 # 不可重试: 文件/输入本身的问题, 重试无意义(沿用原 _should_retry_error 列表)
 _NON_RETRYABLE_MARKERS = (
-    "音频时长过短", "文件不存在", "不支持的文件格式", "文件太大", "认证失败",
+    "音频时长过短", "文件不存在", "不支持的文件格式", "文件太大", "认证失败", "terms 编码无效",
 )
 
 # 模型相关错误: 可重试 + 触发模型重置(沿用原 _is_model_error 正则)
@@ -969,32 +969,6 @@ class TaskManager:
             )
         except Exception as e:
             logger.error(f"通知任务失败终态消息失败: {e}")
-    
-    def _convert_json_to_srt(self, result: TranscriptionResult) -> str:
-        """将JSON格式的转录结果转换为SRT格式"""
-        srt_lines = []
-        
-        for idx, segment in enumerate(result.segments, 1):
-            # 转换时间格式
-            start_time = self._seconds_to_srt_time(segment.start_time)
-            end_time = self._seconds_to_srt_time(segment.end_time)
-            
-            # SRT格式：序号 -> 时间 -> 文本
-            srt_lines.append(f"{idx}")
-            srt_lines.append(f"{start_time} --> {end_time}")
-            srt_lines.append(f"{segment.speaker}:{segment.text}")
-            srt_lines.append("")  # 空行分隔
-        
-        return "\n".join(srt_lines)
-    
-    def _seconds_to_srt_time(self, seconds: float) -> str:
-        """将秒数转换为SRT时间格式 (HH:MM:SS,mmm)"""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        ms = int((seconds % 1) * 1000)
-        
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
     
     async def _send_wework_notification(self, task: TranscriptionTask, event_type: str):
         """发送企微通知"""

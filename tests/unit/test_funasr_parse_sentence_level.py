@@ -106,14 +106,15 @@ class TestParseSentenceLevel:
             transcriber._generate_srt_from_raw_result([result])
 
     @pytest.mark.parametrize("result", [
-        {"text": ""},
-        {"text": "", "sentence_info": []},
+        [],
+        [{"text": ""}],
+        [{"text": "", "sentence_info": []}],
     ])
     def test_explicit_empty_text_without_sentences_is_empty_success(self, transcriber, result):
-        assert transcriber._parse_and_merge_segments([result]) == []
-        assert transcriber._generate_srt_from_raw_result([result]) == ""
+        assert transcriber._parse_and_merge_segments(result) == []
+        assert transcriber._generate_srt_from_raw_result(result) == ""
 
-    @pytest.mark.parametrize("result", [[], [None], None, {}])
+    @pytest.mark.parametrize("result", [[None], None, {}])
     def test_unknown_or_missing_text_shape_fails(self, transcriber, result):
         with pytest.raises(ValueError, match="FunASR result invalid-shape"):
             transcriber._parse_and_merge_segments(result)

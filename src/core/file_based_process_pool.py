@@ -621,8 +621,8 @@ class FileBasedProcessPool:
             for character in term
         ):
             logger.error("WORKER-TERMS-INVALID: terms 包含不可 UTF-8 编码的代理字符")
-            # task_manager.classify_error 用此既有 marker 将输入格式错误归为不可重试。
-            raise ValueError("参数错误: terms 必须是 UTF-8 可编码文本（不支持的文件格式）")
+            # task_manager.classify_error 用「terms 编码无效」marker 将此错误归为不可重试。
+            raise ValueError("参数错误: terms 必须是 UTF-8 可编码文本（terms 编码无效）")
 
         if not self.is_initialized:
             if self._shutdown_requested:
