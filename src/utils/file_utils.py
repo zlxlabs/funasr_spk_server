@@ -1,15 +1,18 @@
 """
 文件处理工具模块
 """
+import asyncio
 import math
 import os
 import re
+import shutil
+import tempfile
 import time
 import hashlib
 import aiofiles
 import ffmpeg
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from loguru import logger
 from src.core.config import config
 
@@ -39,6 +42,38 @@ def is_allowed_file(filename: str) -> bool:
     return ext in config.server.allowed_extensions
 
 
+def publish_file_atomically(
+    source: Union[bytes, str, os.PathLike], destination: Union[str, os.PathLike]
+) -> None:
+    """将字节或源文件发布到同目录临时文件，再原子替换目标路径。"""
+    target = Path(destination)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=str(target.parent),
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = temp_file.name
+            if isinstance(source, bytes):
+                temp_file.write(source)
+            else:
+                shutil.copyfile(os.fspath(source), temp_path)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, target)
+        temp_path = None
+    except Exception as exc:
+        logger.error(
+            "UPLOAD-ATOMIC-PUBLISH-FAILED path={} error={}", target, str(exc)
+        )
+        if temp_path is not None:
+            os.unlink(temp_path)
+        raise
+
+
 async def save_uploaded_file(file_data: bytes, filename: str) -> Tuple[str, str]:
     """保存上传的文件"""
     # 确保上传目录存在
@@ -50,9 +85,8 @@ async def save_uploaded_file(file_data: bytes, filename: str) -> Tuple[str, str]
     safe_filename = f"{file_hash}{ext}"
     file_path = str(Path(config.server.upload_dir) / safe_filename)
     
-    # 保存文件
-    async with aiofiles.open(file_path, 'wb') as f:
-        await f.write(file_data)
+    # 在线程中写临时文件、fsync 后原子替换，避免截断正在使用的共享文件。
+    await asyncio.to_thread(publish_file_atomically, file_data, file_path)
     
     logger.debug(f"文件已保存: {file_path}")
     return file_path, file_hash
