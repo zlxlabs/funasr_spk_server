@@ -20,6 +20,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+pytestmark = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="需要 macOS 原生 libggml/CoreML",
+)
+
+
 @pytest.fixture
 def fake_runtimes(monkeypatch, tmp_path):
     """Mock onnxruntime + coremltools, 验证 provider 路由 & mlmodel 加载参数."""
