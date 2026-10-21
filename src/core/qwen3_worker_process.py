@@ -96,8 +96,14 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
     SHERPA_SUPPORTED_EXTENSIONS = {".wav", ".flac", ".ogg", ".mp3", ".opus"}
     converted_wav_path = None
     actual_audio_path = audio_path
+    original_file_hash = None
     audio_ext = os.path.splitext(audio_path)[1].lower()
     if audio_ext not in SHERPA_SUPPORTED_EXTENSIONS:
+        # pool 已把原始上传字节复制到 audio_path；模型输入可以转码，但结果/cache hash 必须仍指向原始字节。
+        # 无文件的旧单测 fake 路径不进入真实转录；真实任务的池副本必然存在。
+        if os.path.isfile(audio_path):
+            from src.utils.file_utils import calculate_file_hash
+            original_file_hash = asyncio.run(calculate_file_hash(audio_path))
         try:
             from src.utils.file_utils import convert_to_wav
             converted_wav_path = audio_path.rsplit(".", 1)[0] + ".converted.wav"
@@ -123,6 +129,11 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
         # 把 file_name 改写为用户上传的原始文件名
         # (pool 派发把 audio 复制到 task_dir/{uuid}.wav, worker 拿到的 basename 是 UUID, 不是原始名)
         result = _rewrite_file_name(result, original_basename, output_format)
+        if original_file_hash is not None:
+            if output_format == "srt":
+                result["file_hash"] = original_file_hash
+            elif isinstance(result, tuple) and len(result) == 2:
+                result[0].file_hash = original_file_hash
 
         result_data = {
             "task_id": task_id,
@@ -167,6 +178,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
 
 def worker_loop(worker_id: int, task_dir: str) -> None:
     """worker 主循环: 加载模型 → 写 ready → 轮询任务 → 单任务后退出"""
+    parent_pid = os.getppid()
     print(f"[Qwen3-Worker-{worker_id}] ========== 启动 (PID: {os.getpid()}) ==========")
     print(f"[Qwen3-Worker-{worker_id}] 任务目录: {task_dir}")
 
@@ -174,11 +186,8 @@ def worker_loop(worker_id: int, task_dir: str) -> None:
     print(f"[Qwen3-Worker-{worker_id}] 加载 Qwen3 转录器...")
     transcriber = load_qwen3_transcriber()
     # 提前触发引擎构建(避免第一个任务的 latency 异常)
-    try:
-        asyncio.run(transcriber.initialize())
-        print(f"[Qwen3-Worker-{worker_id}] 引擎预热完成")
-    except Exception as e:
-        print(f"[Qwen3-Worker-{worker_id}] 引擎预热失败(将在首次 transcribe 时 lazy 加载): {e}")
+    asyncio.run(transcriber.initialize())
+    print(f"[Qwen3-Worker-{worker_id}] 引擎预热完成")
 
     # 写 ready 文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")
@@ -189,6 +198,14 @@ def worker_loop(worker_id: int, task_dir: str) -> None:
     restart_requested = False
     while True:
         try:
+            current_parent_pid = os.getppid()
+            if current_parent_pid != parent_pid:
+                print(
+                    f"[Qwen3-Worker-{worker_id}] 父进程已消失 (ppid {parent_pid} → {current_parent_pid}), 退出"
+                )
+                Path(ready_file).unlink(missing_ok=True)
+                break
+
             # 检查停止信号
             stop_file = os.path.join(task_dir, f"worker_{worker_id}.stop")
             if os.path.exists(stop_file):
