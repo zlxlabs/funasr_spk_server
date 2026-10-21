@@ -1,0 +1,22 @@
+# Dropped into each repo as .github/workflows/gate-shadow.yml by scripts/onboard-repo.sh.
+name: gate-shadow
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+# gate-shadow-v2.yml only reads source and prior-run artifacts; it never posts
+# a PR comment and therefore must not receive pull-request write access.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  gate-shadow:
+    uses: zlxlabs/gate/.github/workflows/gate-shadow-v2.yml@v2
+    with:
+      tier: personal        # personal | internal | saas
+      runner: self          # self (self-hosted) | hosted (no shadow jobs)
+      design_doc: ""        # e.g. docs/DESIGN.md
