@@ -688,11 +688,24 @@ class FileBasedProcessPool:
                         or result_data.get("worker_pid") != lease.process.pid
                     ):
                         raise RuntimeError(f"result ownership mismatch for task {task_id}")
-                    await self._release_worker_lease(lease, force=False, replenish=True)
-                    lease = None
                     if result_data["success"]:
+                        try:
+                            await self._release_worker_lease(
+                                lease, force=False, replenish=True
+                            )
+                        except Exception as release_error:
+                            logger.error(
+                                "POOL-LEASE-RELEASE-FAILED: "
+                                f"task_id={lease.task_id} worker_id={worker_id} "
+                                f"worker_pid={lease.process.pid} error={release_error!r}"
+                            )
+                        else:
+                            lease = None
                         logger.debug(f"任务 {task_id} 处理成功 (工作进程 {worker_id})")
                         return result_data["result"]
+
+                    await self._release_worker_lease(lease, force=False, replenish=True)
+                    lease = None
                     error_msg = result_data.get("error", "未知错误")
                     logger.error(f"任务 {task_id} 处理失败: {error_msg}")
                     raise Exception(f"处理失败: {error_msg}")
@@ -749,13 +762,6 @@ class FileBasedProcessPool:
         except Exception as e:
             logger.warning(f"无法获取音频时长，使用默认超时: {e}")
             return 1200  # 默认20分钟
-
-    def _is_worker_alive(self, worker_id: int) -> bool:
-        """检查工作进程是否存活"""
-        if worker_id < len(self.worker_processes):
-            process = self.worker_processes[worker_id]
-            return process is not None and process.poll() is None
-        return False
 
     # ------------------------------------------------------------------
     # 清理
