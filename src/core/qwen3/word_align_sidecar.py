@@ -304,6 +304,14 @@ class WordAlignSidecarClient:
         self._proc: Optional[Any] = None
         self._lock = threading.RLock()
 
+    @property
+    def running_pid(self) -> Optional[int]:
+        """存活 sidecar 子进程的 PID; 未启动或已退出时返回 None."""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return None
+        return proc.pid
+
     def _alive(self) -> bool:
         return (
             self._proc is not None
