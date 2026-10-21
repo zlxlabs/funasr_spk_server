@@ -22,8 +22,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import json
 import os
 import sys
+import tempfile
 import time
 
 # 保证可从项目根 import src.*
@@ -40,14 +42,35 @@ from src.observability.alerting import (
     build_probe,
     evaluate_alerts,
     load_state,
-    save_state,
 )
 from src.utils.notification import send_custom_notification
 
 
 def _scrape_base() -> str:
-    """本机回环 + server 端口 (server.host 可能是 0.0.0.0, 抓取走 127.0.0.1)。"""
-    return f"http://127.0.0.1:{config.server.port}"
+    """从 server 配置构造探测地址；通配绑定地址转换为本机回环地址。"""
+    host = config.server.host.strip()
+    if host in {"", "0.0.0.0"}:
+        host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{config.server.port}"
+
+
+def _save_state_atomically(path: str, state: dict) -> None:
+    """在 state 同目录写临时文件，完整序列化后原子替换旧文件。"""
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=parent,
+        prefix=f".{os.path.basename(path)}.",
+        delete=False,
+    ) as temp_file:
+        json.dump(state, temp_file, ensure_ascii=False, indent=2)
+    os.replace(temp_file.name, path)
 
 
 def _state_path() -> str:
@@ -62,7 +85,7 @@ def probe_once(base: str, token, timeout: float) -> dict:
     """抓 /health + /metrics, 组装成 evaluate_alerts 的 probe。
 
     reachable 看"是否拿到任何 HTTP 响应"(503 degraded 也算可达), 仅连接错误 → 不可达。
-    /metrics 仅 200 才取文本 (鉴权失败/错误 → None, 指标型规则本轮跳过)。
+    /metrics 仅 200 才取文本；取不到时由 main 标记 ALERT-METRICS-UNAVAILABLE 并非零退出。
     """
     health_ok = False
     health_body = None
@@ -85,9 +108,9 @@ def probe_once(base: str, token, timeout: float) -> dict:
                 if r.status_code == 200:
                     metrics_text = r.text
                 else:
-                    logger.warning(f"/metrics 返回 {r.status_code} (本轮跳过指标型规则)")
+                    logger.warning(f"/metrics 返回 HTTP {r.status_code}")
             except httpx.RequestError as exc:
-                logger.warning(f"/metrics 抓取失败: {exc}")
+                logger.warning("/metrics 抓取失败 (请求异常)")
     except Exception as exc:  # httpx.Client 构造等极端情况
         logger.error(f"探测异常: {exc}")
 
@@ -177,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     base = _scrape_base()
     probe = probe_once(base, obs.metrics_token, timeout=10.0)
+    # 整个服务不可达时由 server_down 规则告警；单独的指标端点不可用则必须显式失败。
+    metrics_unavailable = probe["reachable"] and probe["metrics"] is None
+    if metrics_unavailable:
+        logger.error("ALERT-METRICS-UNAVAILABLE /metrics 未提供可用指标")
 
     state_path = _state_path()
     prev_state = load_state(state_path)
@@ -192,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logger.debug("本轮无告警。")
 
-    save_state(
+    _save_state_atomically(
         state_path,
         _state_with_only_sent(prev_state, result["state"], alerts, sent_keys),
     )
@@ -203,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             f"ALERT-SEND-FAILED {len(missed)}/{len(alerts)} 条告警未送达, 本轮不记已告警"
         )
         return 1
-    return 0
+    return 1 if metrics_unavailable else 0
 
 
 if __name__ == "__main__":
