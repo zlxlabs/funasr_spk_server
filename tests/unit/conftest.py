@@ -50,3 +50,34 @@ def mock_vendor_llama_native_module(monkeypatch):
     if sys.platform != "darwin":
         llama_module = "src.core.vendor.qwen_asr_gguf.inference.llama"
         monkeypatch.setitem(sys.modules, llama_module, types.ModuleType(llama_module))
+
+
+def test_unit_notification_default_respects_explicit_environment():
+    """独立进程验证单测默认值，以及用户显式值不被覆盖。"""
+    import subprocess
+    import sys
+
+    script = (
+        "import os, runpy, sys; runpy.run_path(sys.argv[1]); "
+        "print(os.environ.get('FUNASR_NOTIFICATION_ENABLED'))"
+    )
+    env = os.environ.copy()
+    env.pop("FUNASR_NOTIFICATION_ENABLED", None)
+    unset_result = subprocess.run(
+        [sys.executable, "-c", script, __file__],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert unset_result.stdout.strip() == "false"
+
+    env["FUNASR_NOTIFICATION_ENABLED"] = "true"
+    explicit_result = subprocess.run(
+        [sys.executable, "-c", script, __file__],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert explicit_result.stdout.strip() == "true"
