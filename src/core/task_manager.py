@@ -82,6 +82,19 @@ class ErrorKind(str, Enum):
 # 可重试 kind(显式集合, codex #11 防取反误判)
 _RETRYABLE_KINDS = frozenset({ErrorKind.MODEL_ERROR, ErrorKind.ENGINE_ERROR})
 
+
+def check_requested_engine(requested: Optional[str], server_engine: str) -> Optional[str]:
+    """校验请求 engine 与全局唯一的服务端 engine 是否一致。"""
+    requested_engine = (requested or "").strip()
+    if requested_engine and requested_engine != server_engine:
+        return (
+            f"Server configured with engine={server_engine!r}, "
+            f"cannot accept engine={requested_engine!r}. "
+            f"Please omit the engine field or set it to {server_engine!r}."
+        )
+    return None
+
+
 # 不可重试: 文件/输入本身的问题, 重试无意义(沿用原 _should_retry_error 列表)
 _NON_RETRYABLE_MARKERS = (
     "音频时长过短", "文件不存在", "不支持的文件格式", "文件太大", "认证失败",
@@ -184,15 +197,12 @@ class TaskManager:
         if task_id is None:
             task_id = str(uuid.uuid4())
 
-        # PR2: 全局唯一引擎 — request.engine 非空时必须等于 server engine, 否则 reject
+        # PR2: 全局唯一引擎 — websocket 准入与此最终防线共用同一判定文字。
         server_engine = config.transcription.default_engine
+        engine_error = check_requested_engine(request.engine, server_engine)
+        if engine_error is not None:
+            raise ValueError(engine_error)
         requested = (request.engine or "").strip()
-        if requested and requested != server_engine:
-            raise ValueError(
-                f"Server configured with engine={server_engine!r}, "
-                f"cannot accept engine={requested!r}. "
-                f"Please omit the engine field or set it to {server_engine!r}."
-            )
         engine = requested or server_engine
 
         # 创建任务对象

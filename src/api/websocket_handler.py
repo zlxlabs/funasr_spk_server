@@ -407,21 +407,18 @@ class WebSocketHandler:
             await self._send_error(websocket, "upload_error", str(e))
 
     def _upload_engine_error(self, request: FileUploadRequest) -> Optional[str]:
-        """复用 TaskManager.create_task 的 engine 判定，供缓存短路与分片准入共用。"""
+        """复用 TaskManager.create_task 的 engine 判定，供早期准入检查使用。"""
+        from src.core.task_manager import check_requested_engine
+
         server_engine = config.transcription.default_engine
-        requested = (request.engine or "").strip()
-        if requested and requested != server_engine:
+        error = check_requested_engine(request.engine, server_engine)
+        if error is not None:
             logger.warning(
                 "UPLOAD-ENGINE-REJECTED requested_engine={} server_engine={}",
-                requested,
+                (request.engine or "").strip(),
                 server_engine,
             )
-            return (
-                f"Server configured with engine={server_engine!r}, "
-                f"cannot accept engine={requested!r}. "
-                f"Please omit the engine field or set it to {server_engine!r}."
-            )
-        return None
+        return error
 
     async def _handle_upload_data(self, websocket: WebSocketServerProtocol, connection_id: str, data: dict):
         """处理文件数据上传"""
@@ -1006,7 +1003,7 @@ class WebSocketHandler:
             # 流式复制到内容寻址位置，避免将整个上传文件读入内存。
             file_path = session.get("finalized_file_path")
             if not (file_path and os.path.exists(file_path)):
-                from src.utils.file_utils import get_file_extension
+                from src.utils.file_utils import get_file_extension, publish_file_atomically
 
                 os.makedirs(config.server.upload_dir, exist_ok=True)
                 file_path = os.path.join(
@@ -1015,7 +1012,10 @@ class WebSocketHandler:
                 )
                 session["finalized_file_path"] = file_path
                 await loop.run_in_executor(
-                    None, shutil.copyfile, session["temp_file_path"], file_path
+                    None,
+                    publish_file_atomically,
+                    session["temp_file_path"],
+                    file_path,
                 )
 
             request = session.get("request")
