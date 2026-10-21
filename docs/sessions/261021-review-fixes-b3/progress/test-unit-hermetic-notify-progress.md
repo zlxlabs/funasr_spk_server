@@ -14,3 +14,8 @@
 - 本段结论：在既有 tests/unit/conftest.py 中加入 1 个窄回归测试，独立子进程断言默认 false 且显式 true 不被覆盖；禁用 setdefault 时直接执行该判据红（AssertionError），恢复后 `venv/bin/python -m pytest tests/unit/conftest.py -q` 为 1 passed。临时 .env=true 且未设 webhook 下再次运行 bash scripts/run_checks.sh，1217 passed、6 skipped、0 failed、0 collection errors；临时文件已清理。
 - 关键决策与已否决方案：不新增测试文件；窄测试只置于 unit 专属 conftest，tests/conftest.py 与 integration 路径保持不动；未为直接命令添加额外 pytest 收集配置。
 - 下一步唯一动作：对第二个提交的暂存树做 scope 检查，提交并推送窄回归测试与进度记录。
+
+- 当前阶段：回归测试边界加固，准备复验。
+- 本段结论：窄回归测试进一步核对子进程收到的初始开关、执行的 conftest 路径 argv、导入后的开关值；移除 setdefault 后断言稳定变红，恢复后将重跑窄测与 unit 全量。
+- 关键决策与已否决方案：保留测试在现有 conftest，不增加文件；断言 producer/consumer 实际子进程 payload，而不是只观察父进程中的变量。
+- 下一步唯一动作：在临时通知开启且无 webhook 的 .env 条件下重跑窄测和全量，随后 scope 检查、提交并推送。

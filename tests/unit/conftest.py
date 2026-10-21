@@ -57,27 +57,41 @@ def test_unit_notification_default_respects_explicit_environment():
     import subprocess
     import sys
 
+    import json
+
     script = (
-        "import os, runpy, sys; runpy.run_path(sys.argv[1]); "
-        "print(os.environ.get('FUNASR_NOTIFICATION_ENABLED'))"
+        "import json, os, runpy, sys; "
+        "initial = os.environ.get('FUNASR_NOTIFICATION_ENABLED'); "
+        "runpy.run_path(sys.argv[1]); "
+        "print(json.dumps({'initial': initial, 'value': "
+        "os.environ.get('FUNASR_NOTIFICATION_ENABLED'), 'path': sys.argv[1]}))"
     )
+    command = [sys.executable, "-c", script, __file__]
     env = os.environ.copy()
     env.pop("FUNASR_NOTIFICATION_ENABLED", None)
     unset_result = subprocess.run(
-        [sys.executable, "-c", script, __file__],
+        command,
         check=True,
         capture_output=True,
         text=True,
         env=env,
     )
-    assert unset_result.stdout.strip() == "false"
+    assert json.loads(unset_result.stdout) == {
+        "initial": None,
+        "value": "false",
+        "path": __file__,
+    }
 
     env["FUNASR_NOTIFICATION_ENABLED"] = "true"
     explicit_result = subprocess.run(
-        [sys.executable, "-c", script, __file__],
+        command,
         check=True,
         capture_output=True,
         text=True,
         env=env,
     )
-    assert explicit_result.stdout.strip() == "true"
+    assert json.loads(explicit_result.stdout) == {
+        "initial": "true",
+        "value": "true",
+        "path": __file__,
+    }
