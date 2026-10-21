@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import sys
 import threading
+import wave
 from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +17,6 @@ def transcriber(monkeypatch):
         ("funasr", {"AutoModel": MagicMock()}),
         ("torch", {}),
         ("torch.cuda", {}),
-        ("ffmpeg", {}),
     ):
         module = ModuleType(name)
         for key, value in attrs.items():
@@ -36,31 +36,38 @@ def transcriber(monkeypatch):
     monkeypatch.delitem(sys.modules, "src.core.funasr_transcriber", raising=False)
 
 
-def _prepare_transcriber(instance, monkeypatch, module, file_utils, result):
-    """让公开 transcribe 入口跳过真实模型、音频和文件系统依赖。"""
+def _prepare_transcriber(instance, result):
+    """只替换最外层模型调用，让公开 transcribe 走真实音频与文件路径。"""
     instance.is_initialized = True
     instance.concurrency_mode = "lock"
     instance.config = {"funasr": {"batch_size_s": 20}, "transcription": {}}
     instance._model_lock = threading.Lock()
     instance.model = MagicMock()
     instance.model.generate.return_value = result
-    monkeypatch.setattr(module, "get_audio_duration", lambda _path: 1.0)
-    monkeypatch.setattr(module, "release_accelerator_memory", lambda **_kwargs: None)
-    monkeypatch.setattr(file_utils, "calculate_file_hash", AsyncMock(return_value="empty-hash"))
+
+
+def _write_audio(path):
+    """生成一秒真实 WAV，供公开转录路径探测时长并计算文件哈希。"""
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\x00\x00" * 16000)
 
 
 @pytest.mark.asyncio
-async def test_top_level_empty_list_is_success_and_logs_marker(transcriber, monkeypatch):
+async def test_top_level_empty_list_is_success_and_logs_marker(transcriber, monkeypatch, tmp_path):
     """真实转录入口把 FunASR 的 [] 作为空成功，并记录可检索警告。"""
     import src.core.funasr_transcriber as module
-    import src.utils.file_utils as file_utils
 
     logger = MagicMock()
     monkeypatch.setattr(module, "logger", logger)
-    _prepare_transcriber(transcriber, monkeypatch, module, file_utils, [])
+    _prepare_transcriber(transcriber, [])
+    audio = tmp_path / "empty.wav"
+    _write_audio(audio)
 
     result, raw_result = await transcriber.transcribe(
-        audio_path="/tmp/empty.wav", task_id="empty-task", output_format="json"
+        audio_path=str(audio), task_id="empty-task", output_format="json"
     )
 
     assert raw_result == []
@@ -73,14 +80,13 @@ async def test_top_level_empty_list_is_success_and_logs_marker(transcriber, monk
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("result", [[{"text": 1}], [{"text": "recognized"}]])
-async def test_invalid_top_level_payload_still_fails(transcriber, monkeypatch, result):
+async def test_invalid_top_level_payload_still_fails(transcriber, result, tmp_path):
     """空列表豁免不放宽其它非法结果形状。"""
-    import src.core.funasr_transcriber as module
-    import src.utils.file_utils as file_utils
-
-    _prepare_transcriber(transcriber, monkeypatch, module, file_utils, result)
+    _prepare_transcriber(transcriber, result)
+    audio = tmp_path / "invalid.wav"
+    _write_audio(audio)
 
     with pytest.raises(Exception, match="FunASR result invalid-shape"):
         await transcriber.transcribe(
-            audio_path="/tmp/invalid.wav", task_id="invalid-task", output_format="json"
+            audio_path=str(audio), task_id="invalid-task", output_format="json"
         )

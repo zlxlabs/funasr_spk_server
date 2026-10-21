@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import sys
 import threading
+import wave
 from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,7 +16,6 @@ def funasr_transcriber(monkeypatch):
         ("funasr", {"AutoModel": MagicMock()}),
         ("torch", {}),
         ("torch.cuda", {}),
-        ("ffmpeg", {}),
     ):
         module = ModuleType(name)
         for key, value in attrs.items():
@@ -42,10 +42,19 @@ def database(tmp_path):
     return DatabaseManager(db_path=str(tmp_path / "srt.db"))
 
 
+def _write_audio(path):
+    """写一秒真实 WAV，避免 mock 音频探测和文件哈希。"""
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\x00\x00" * 16000)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("formatter", ["funasr", "database"])
 async def test_srt_millisecond_rounding_and_second_carry(
-    formatter, funasr_transcriber, database, monkeypatch
+    formatter, funasr_transcriber, database, tmp_path
 ):
     """通过转录或缓存命中入口验证 raw 毫秒取整与秒进位。"""
     sentences = [
@@ -54,20 +63,16 @@ async def test_srt_millisecond_rounding_and_second_carry(
     ]
     raw_result = [{"sentence_info": sentences}]
     if formatter == "funasr":
-        import src.core.funasr_transcriber as module
-        import src.utils.file_utils as file_utils
-
+        audio = tmp_path / "srt-rounding.wav"
+        _write_audio(audio)
         funasr_transcriber.is_initialized = True
         funasr_transcriber.concurrency_mode = "lock"
         funasr_transcriber.config = {"funasr": {"batch_size_s": 20}, "transcription": {}}
         funasr_transcriber._model_lock = threading.Lock()
         funasr_transcriber.model = MagicMock()
         funasr_transcriber.model.generate.return_value = raw_result
-        monkeypatch.setattr(module, "get_audio_duration", lambda _path: 1.0)
-        monkeypatch.setattr(module, "release_accelerator_memory", lambda **_kwargs: None)
-        monkeypatch.setattr(file_utils, "calculate_file_hash", AsyncMock(return_value="srt-hash"))
         result = await funasr_transcriber.transcribe(
-            audio_path="/tmp/srt-rounding.wav", task_id="srt-task", output_format="srt"
+            audio_path=str(audio), task_id="srt-task", output_format="srt"
         )
         srt = result["content"]
     else:
