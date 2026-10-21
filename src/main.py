@@ -35,6 +35,7 @@ class FunASRServer:
         self.server = None
         self.transcriber = None
         self.is_running = False
+        self.active_connections = 0
     
     async def start(self):
         """启动服务器"""
@@ -67,13 +68,12 @@ class FunASRServer:
 
             # 启动WebSocket服务器（优化大文件传输配置）
             self.server = await websockets.serve(
-                ws_handler.handle_connection,
+                self._handle_connection,
                 config.server.host,
                 config.server.port,
                 # 同端口 HTTP 端点: GET /health|/metrics 返 HTTP, 其它走 ws 升级
                 process_request=observability_endpoints.process_request,
                 max_size=config.server.max_file_size_mb * 1024 * 1024,
-                max_queue=config.server.max_connections,
                 ping_interval=60,   # 增加到60秒发送一次 ping（避免大文件传输时超时）
                 ping_timeout=120,   # ping 响应超时120秒（给客户端更多处理时间）
                 close_timeout=60,   # 关闭连接超时60秒
@@ -103,8 +103,24 @@ class FunASRServer:
             logger.error(f"服务器启动失败: {e}")
             raise
     
-    async def stop(self):
-        """停止服务器"""
+    async def _handle_connection(self, websocket, *args):
+        """按配置限制活跃 WebSocket 数，并在处理结束后归还连接名额。"""
+        max_connections = config.server.max_connections
+        if self.active_connections >= max_connections:
+            logger.warning(
+                f"WS-CONN-LIMIT 活跃连接数已达上限 {max_connections}，拒绝新连接"
+            )
+            await websocket.close(code=1013, reason="server connection limit reached")
+            return
+
+        self.active_connections += 1
+        try:
+            await ws_handler.handle_connection(websocket, *args)
+        finally:
+            self.active_connections -= 1
+
+    async def stop(self, *, normal_shutdown=True):
+        """停止服务器；仅在服务正常运行后关闭时发送正常关闭通知。"""
         logger.info("正在停止服务器...")
         
         self.is_running = False
@@ -124,12 +140,13 @@ class FunASRServer:
         if self.server:
             await self.server.wait_closed()
         
-        # 发送停止通知
-        await send_custom_notification(
-            "🛑 FunASR转录服务器已停止",
-            "服务器已正常关闭",
-            "text"
-        )
+        # 启动失败后的资源回收不能伪报成正常关闭。
+        if normal_shutdown:
+            await send_custom_notification(
+                "🛑 FunASR转录服务器已停止",
+                "服务器已正常关闭",
+                "text"
+            )
         
         logger.info("服务器已停止")
     
@@ -188,17 +205,20 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    startup_completed = False
     try:
         # 启动服务器
         await server.start()
-        
+        startup_completed = True
+
         # 等待关闭信号
         await shutdown_event.wait()
-        
+
     except Exception as e:
         logger.error(f"服务器错误: {e}")
+        raise
     finally:
-        await server.stop()
+        await server.stop(normal_shutdown=startup_completed)
 
 
 if __name__ == "__main__":
