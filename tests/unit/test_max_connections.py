@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from types import SimpleNamespace
 
@@ -16,6 +17,39 @@ if _original_notification_enabled is None:
     os.environ.pop("FUNASR_NOTIFICATION_ENABLED", None)
 else:
     os.environ["FUNASR_NOTIFICATION_ENABLED"] = _original_notification_enabled
+
+
+@pytest.mark.asyncio
+async def test_live_server_passes_websocket_path_to_real_handler(monkeypatch):
+    """真实 handler 经 websockets.serve 接入时应收到连接欢迎消息。"""
+    monkeypatch.setattr(server_main.config.server, "host", "127.0.0.1")
+    monkeypatch.setattr(server_main.config.server, "port", 0)
+    monkeypatch.setattr(server_main.config.server, "max_connections", 2)
+    monkeypatch.setattr(server_main.db_manager, "init_db", _async_noop)
+    monkeypatch.setattr(server_main.task_manager, "start", _async_noop)
+    monkeypatch.setattr(server_main.task_manager, "stop", _async_noop)
+    monkeypatch.setattr(server_main, "send_custom_notification", _async_noop)
+
+    transcriber = SimpleNamespace(initialize=_async_noop, cleanup=_async_noop)
+    monkeypatch.setattr(server_main, "resolve_transcriber", lambda _engine: transcriber)
+
+    server = server_main.FunASRServer()
+    server._periodic_cleanup = _async_noop
+    client = None
+    started = False
+    try:
+        await server.start()
+        started = True
+        port = server.server.sockets[0].getsockname()[1]
+        client = await websockets.connect(f"ws://127.0.0.1:{port}/")
+
+        welcome = await asyncio.wait_for(client.recv(), timeout=1)
+        assert json.loads(welcome)["type"] == "connected"
+    finally:
+        if client is not None:
+            await client.close()
+        if started:
+            await server.stop()
 
 
 @pytest.mark.asyncio
