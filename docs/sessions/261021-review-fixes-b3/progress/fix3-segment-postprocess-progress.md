@@ -17,3 +17,9 @@
 - 本段结论：新测试 7/7、相关 Qwen3 单测 94/94 通过；卡范围检查通过，改动规模 300 行（不计进度文档）；完整 `run_checks.sh` 在 Linux 上仍有 1 fail / 10 error，故接受条件未全部满足。
 - 关键决策与已否决方案：不跨 Scope 修复 vendor / encoder 环境问题；基线 API 不可用，继承红无法判定；未在 Linux 上伪称已跑 Mac Qwen3 parity。
 - 下一步唯一动作：提交本段进度后推送 `card/fix3-segment-postprocess`，读取远端 ref 验证推送结果。
+
+## 2026-10-21：第 1 轮验收修正
+- 当前阶段：修正主脑指出的微短段远距吸附问题；改动与过滤单测通过，准备提交并推送。
+- 本段结论：先加公开入口回归测试，旧实现把 0–10 秒前段扩成 0–200.1 秒，测试按预期红；限制吸附 gap 后，新回归和指定过滤套件通过（235 passed，974 deselected）。
+- 关键决策与已否决方案：恢复 `apply_short_segment_guard` / `merge_consecutive_same_speaker` 的 `max_span_sec=0.0` 默认和原注释；吸附在完整 guard 内复用既有 `merge_gap_sec`，独立 `drop_tiny_segments` 调用保留历史 0.1 秒近邻兼容阈值；第 (2)–(6) 不再改，第 (7) 按验收反馈接受。
+- 下一步唯一动作：核对范围和 diff 后提交本轮修复并推送远端分支。

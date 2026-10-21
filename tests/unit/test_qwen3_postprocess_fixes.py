@@ -32,19 +32,45 @@ def _old_attach_reference(segments: list[Segment], words: list[dict]) -> list[li
     return buckets
 
 
-def test_default_same_speaker_merge_has_a_span_cap() -> None:
-    """公开 guard 默认不得把连续独白合成超过已有 120 秒上限的巨段。"""
+def test_short_segment_is_not_absorbed_across_a_remote_gap() -> None:
+    """远距离 tiny 段不应通过前/后邻接吸附拉成巨段；近邻仍按既有 gap 参数吸附。"""
     from src.core.qwen3.postprocess import apply_short_segment_guard
 
-    segments = [
-        {"start": 0.0, "end": 60.0, "speaker": "0", "text": "一"},
-        {"start": 60.0, "end": 120.0, "speaker": "0", "text": "二"},
-        {"start": 120.0, "end": 180.0, "speaker": "0", "text": "三"},
+    remote_segments = [
+        {"start": 0.0, "end": 10.0, "speaker": "0", "text": "前段"},
+        {"start": 200.0, "end": 200.1, "speaker": "1", "text": "微短段"},
     ]
-    out, stats = apply_short_segment_guard(segments)
+    remote_out, remote_stats = apply_short_segment_guard(remote_segments)
+    assert [(s["start"], s["end"], s["text"]) for s in remote_out] == [
+        (0.0, 10.0, "前段"),
+        (200.0, 200.1, "微短段"),
+    ]
+    assert remote_stats["drop"]["dropped_total"] == 0
 
-    assert [(s["start"], s["end"]) for s in out] == [(0.0, 120.0), (120.0, 180.0)]
-    assert stats["merge"]["merged"] == 1
+    both_remote_segments = [
+        {"start": 0.0, "end": 10.0, "speaker": "0", "text": "前段"},
+        {"start": 200.0, "end": 200.1, "speaker": "1", "text": "微短段"},
+        {"start": 400.0, "end": 410.0, "speaker": "2", "text": "后段"},
+    ]
+    both_remote_out, both_remote_stats = apply_short_segment_guard(
+        both_remote_segments
+    )
+    assert [(s["start"], s["end"], s["text"]) for s in both_remote_out] == [
+        (0.0, 10.0, "前段"),
+        (200.0, 200.1, "微短段"),
+        (400.0, 410.0, "后段"),
+    ]
+    assert both_remote_stats["drop"]["dropped_total"] == 0
+
+    near_segments = [
+        {"start": 0.0, "end": 10.0, "speaker": "0", "text": "前段"},
+        {"start": 10.04, "end": 10.1, "speaker": "1", "text": "微短段"},
+    ]
+    near_out, near_stats = apply_short_segment_guard(near_segments)
+    assert [(s["start"], s["end"], s["text"]) for s in near_out] == [
+        (0.0, 10.1, "前段微短段"),
+    ]
+    assert near_stats["drop"]["merged_into_prev"] == 1
 
 
 def test_merge_chunks_output_is_stably_sorted_by_start_and_end() -> None:
