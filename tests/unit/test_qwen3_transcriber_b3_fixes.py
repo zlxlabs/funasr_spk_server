@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import numpy as np
 
 import pytest
 
@@ -63,7 +62,11 @@ async def test_preflight_counts_free_vram_after_excluding_live_sidecar_usage(tmp
     """sidecar 已占用的显存应从全卡占用中扣除，热复用仍可过预检。"""
     tx = _make_transcriber(word_align_preflight_free_mib=4608)
     audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"audio")
+    with wave.open(str(audio), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b"\x00\x00" * 32000)
     client = _sidecar_client()
     client._proc = SimpleNamespace(pid=27182, poll=lambda: None)
 
@@ -89,10 +92,6 @@ async def test_preflight_counts_free_vram_after_excluding_live_sidecar_usage(tmp
                      )
                  )
              ),
-         ), \
-         patch(
-             "src.core.qwen3_transcriber._load_audio_mono_16k",
-             return_value=(np.zeros(32000), 16000),
          ), \
          patch("src.core.qwen3_transcriber._resolve_device_index", return_value="0"), \
          patch("src.core.qwen3_transcriber.get_word_align_sidecar_client", return_value=client):
