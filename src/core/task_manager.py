@@ -32,6 +32,8 @@ _COLD_START_TASK_SECONDS = 90.0
 _EMA_ALPHA = 0.3
 # 已清理 task_id 的追踪上界（用于轮询区分 expired vs not_found）。
 _EVICTED_TRACK_MAX = 10000
+# 持有后台企微通知任务的引用，防止 fire-and-forget 协程被垃圾回收。
+_background_notification_tasks: set[asyncio.Task] = set()
 
 
 class QueueFullError(Exception):
@@ -991,7 +993,11 @@ class TaskManager:
         
         try:
             from src.utils.notification import send_wework_notification
-            await send_wework_notification(task, event_type)
+            notification_task = asyncio.create_task(
+                send_wework_notification(task, event_type)
+            )
+            _background_notification_tasks.add(notification_task)
+            notification_task.add_done_callback(_background_notification_tasks.discard)
         except Exception as e:
             logger.error(f"发送企微通知失败: {e}")
     
