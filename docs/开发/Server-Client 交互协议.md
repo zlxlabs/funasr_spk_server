@@ -6,7 +6,7 @@
 
 ## 能力契约与 fail-closed
 
-服务端提供只读 HTTP `GET /capabilities`，响应只包含 `schema_version`、当前 `engine`、有效 `runtime`、`features.terms` 和由这些字段计算的 `capability_id`。当前 FunASR 与 Qwen3 都声明 `features.terms: true`。WebSocket `connected` payload 的 `capabilities` 必须复用同一对象；客户端应比较两处 `capability_id`（最好比较完整对象），缺字段或不一致即 fail-closed，不发送术语请求。
+服务端提供只读 HTTP `GET /capabilities`，响应只包含 `schema_version`、当前 `engine`、有效 `runtime`、`features.terms` 和由这些字段计算的 `capability_id`。当前 FunASR 与 Qwen3 都声明 `features.terms: true`。WebSocket `connected` payload 的 `capabilities` 必须复用同一对象。terms 客户端的唯一 fail-closed 预检条件见[客户端交互指南](../使用/客户端交互指南.md)「能力协商」节，本节不另行定义。
 
 ```json
 {
@@ -77,15 +77,12 @@ sequenceDiagram
   "data": {
     "file_name": "x.wav",
     "file_hash": "sha256:...",
-    "file_size": 1234567,
-    "engine": "qwen3"           // 可选, 缺省走 server 默认
+    "file_size": 1234567
   }
 }
 ```
 
-**优先级**: `request.engine` > `config.transcription.default_engine` (env `FUNASR_DEFAULT_ENGINE`) > `"funasr"`。
-
-**缓存隔离**: 缓存 key 已按 `(file_hash, engine)` 联合区分 — 同一份文件在不同引擎下的转录结果**互不命中**,可并存。
+**引擎准入与缓存行为**：默认引擎、`upload_request` 拒绝条件与响应、跨引擎缓存和 `metadata.engine` 的完整协议规则，以[客户端交互指南](../使用/客户端交互指南.md)「引擎选择与缓存行为」为唯一权威说明。服务端准入实现位于 `src/api/websocket_handler.py:_handle_upload_request` / `_upload_engine_error` 和 `src/core/task_manager.py:TaskManager.create_task`；跨引擎回退与折维隔离位于 `src/core/database.py:cache_params` / `get_cached_result`，命中 metadata 由 `src/core/result_projection.py:cache_hit_metadata` 组装。
 
 **引擎能力**:
 - `funasr`: 生产稳定路径, MPS GPU 加速, 支持说话人识别

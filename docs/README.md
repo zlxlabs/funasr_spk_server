@@ -15,7 +15,7 @@
 
 | 文档 | 主题 |
 |---|---|
-| [Server-Client 交互协议][server-protocol] | 服务端视角：能力契约、`terms`、任务状态机、并发控制、错误重试、`engine` 字段路由、异步轮询契约（`task_status_batch` 消息规格） |
+| [Server-Client 交互协议][server-protocol] | 服务端视角：能力契约、`terms`、任务状态机、并发控制、错误重试、引擎准入与缓存共享行为、异步轮询契约（`task_status_batch` 消息规格） |
 | [WebSocket大文件传输最佳实践](开发/WebSocket大文件传输最佳实践.md) | 大文件分片上传方案 + 客户端实现参考 |
 | [兼容性开发文档](开发/FunASR音频转文本服务器兼容性开发文档.md) | FunASR 生产路径详解（Qwen3 路径见 CLAUDE.md） |
 | [可观测性仪表盘设计](开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md) | `/health` + `/metrics`(Prometheus) + `/` 状态页：架构、指标清单、A5 安全、测试加固（CEO+Eng+codex 三重审稿） |

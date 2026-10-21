@@ -17,7 +17,7 @@
 - ✅ `/capabilities` 能力探针与 `scripts/doctor.py --json` 只读部署诊断
 - ✅ WebSocket 实时通信 + 任务队列 + 高负载准入控制
 - ✅ 异步轮询契约（批量 `task_status_batch`，根治高负载 300s 超时）
-- ✅ 按 `(file_hash, engine)` 的智能缓存，相同文件秒回
+- ✅ 按 `(file_hash, engine)` 精确查找、默认支持跨引擎回退的智能缓存，相同文件可秒回
 - ✅ 可观测性：同端口 `/health`（存活探针）+ `/metrics`（Prometheus 指标）
 - ✅ 企微机器人通知 + JWT 认证
 
@@ -47,7 +47,7 @@ WebSocket Handler ──▶ Task Manager ──▶ ASR Engine (dispatch)
    Auth & 校验         Database(缓存)      File Manager
 ```
 
-- **Transcriber Dispatch**（`src/core/transcriber_dispatch.py`）：全局唯一引擎模式，启动时由 `transcription.default_engine` 锁定，`upload_request.engine` 跨引擎请求立即 reject。
+- **引擎准入**：实例引擎由 `transcription.default_engine` 锁定；`upload_request.engine` 省略时使用该默认值，显式指定其他引擎会在单文件/分片上传的数据传输前以 `upload_error` 拒绝。请求字段不是引擎路由；完整规则见[客户端交互指南](docs/使用/客户端交互指南.md)「引擎选择与缓存行为」。
 - **引擎实现**：FunASR（`funasr_transcriber.py`，Paraformer-zh + cam++）/ Qwen3（`qwen3_pool_transcriber.py`，GGUF/ONNX + diarize，runtime-aware 池）。
 - 架构、配置体系、池 dispatch、后处理 pipeline 等权威细节见 [CLAUDE.md](CLAUDE.md)。
 
@@ -78,7 +78,7 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 
 `upload_request.data.terms` 是可选的结构化术语列表。服务端会规范化并校验；空列表不改变识别行为。有效术语不会读取普通缓存，以免把带术语结果误当成普通结果；响应 metadata 会回显 `terms_count` 与引擎相关的 `context_applied`。FunASR hotword、Qwen3 context、缓存与错误契约见[客户端指南](docs/使用/客户端交互指南.md)和[服务端协议][server-protocol]。
 
-上传前可用 `GET /capabilities` 确认当前引擎是否声明 `features.terms=true`；WebSocket `connected` 消息中的 `capabilities` 应与之完全一致，缺失或 `capability_id` 不一致时客户端应 fail-closed，不发送术语请求。
+使用 `terms` 的客户端必须遵循[客户端交互指南](docs/使用/客户端交互指南.md)「能力协商」节中的唯一 fail-closed 条件，完成 capabilities/connected 预检；此处不重复定义预检规则。
 
 ## 引擎选型（按硬件）
 
