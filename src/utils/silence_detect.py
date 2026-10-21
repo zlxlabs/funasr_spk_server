@@ -54,7 +54,7 @@ def ffmpeg_speech_regions(
         "null",
         "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     stderr = proc.stderr or ""
     if proc.returncode != 0:
         raise RuntimeError(stderr[-2000:])
