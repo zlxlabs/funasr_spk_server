@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import time
 from typing import Any, Callable, Optional, Tuple, Union
 
@@ -57,7 +58,12 @@ from src.models.schemas import (
     TranscriptionSegment,
     WordTimestamp,
 )
-from src.core.gpu_mem import free_vram_mib, has_headroom, used_vram_mib
+from src.core.gpu_mem import (
+    _resolve_device_index,
+    free_vram_mib,
+    has_headroom,
+    used_vram_mib,
+)
 from src.core.qwen3.word_align_sidecar import get_word_align_sidecar_client
 from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
@@ -682,8 +688,33 @@ class Qwen3DiarizeTranscriber:
 
         # preflight (#17 复用): 显存不足 → 主进程 CPU, 不拉 CUDA sidecar (codex #11 TOCTOU:
         # 仍非保证, sidecar 内 OOM 退休 + CPU 兜底兜住).
+        client = get_word_align_sidecar_client()
         if self.word_align_preflight_enabled:
             free = free_vram_mib()
+            if free is not None:
+                # nvidia-smi 的 free 是整卡值；热 sidecar 自己持有的显存已包含在其中，
+                # 但复用的 session 不需要再次加载这部分模型显存。只加回 sidecar PID 的
+                # 占用，不把同卡其它进程的显存误当成可用空间。
+                sidecar_process = client._proc
+                if sidecar_process is not None and sidecar_process.poll() is None:
+                    usage = subprocess.run(
+                        [
+                            "nvidia-smi",
+                            "-i",
+                            _resolve_device_index(),
+                            "--query-compute-apps=pid,used_memory",
+                            "--format=csv,noheader,nounits",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    sidecar_used_mib = 0
+                    for row in usage.stdout.splitlines():
+                        pid, used_mib = row.split(",", maxsplit=1)
+                        if int(pid.strip()) == sidecar_process.pid:
+                            sidecar_used_mib += int(used_mib.strip())
+                    free += sidecar_used_mib
             if not has_headroom(free, self.word_align_preflight_free_mib):
                 logger.warning(
                     f"[{task_id}] word_align CUDA preflight 显存不足 "
@@ -694,8 +725,6 @@ class Qwen3DiarizeTranscriber:
                     self._ensure_word_aligner_cpu(), "cpu",
                     {"preflight_skipped_cuda": True, "free_vram_mib": free},
                 )
-
-        client = get_word_align_sidecar_client()
         chunks_json = [self._chunk_to_dict(c) for c in asr_chunks]
         try:
             words, stats = client.align(audio_path, chunks_json, effective_lang)
@@ -801,7 +830,7 @@ class Qwen3DiarizeTranscriber:
         - diarize: False 时跳过 diarize + speaker 后处理层, 输出不含说话人区分.
         """
         options = options or TranscribeOptions()
-        language = options.language
+        language = (options.language or "").strip()
         context = build_qwen_context(options.terms)
         start_time = time.time()
         loop = asyncio.get_event_loop()

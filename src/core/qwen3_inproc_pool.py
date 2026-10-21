@@ -144,6 +144,10 @@ def _default_transcriber_factory():
         word_align_model_path=q.word_align_model_path,
         word_align_provider=q.word_align_provider,
         word_align_batch_size=q.word_align_batch_size,
+        word_align_cuda_batch_size=q.word_align_cuda_batch_size,
+        word_align_preflight_enabled=q.word_align_preflight_enabled,
+        word_align_preflight_free_mib=q.word_align_preflight_free_mib,
+        word_align_sidecar_enabled=q.word_align_sidecar_enabled,
     )
     tx.embedding_model = q.embedding_model
     return tx
