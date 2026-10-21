@@ -103,7 +103,7 @@ class FunASRServer:
             logger.error(f"服务器启动失败: {e}")
             raise
     
-    async def _handle_connection(self, websocket, *args):
+    async def _handle_connection(self, websocket):
         """按配置限制活跃 WebSocket 数，并在处理结束后归还连接名额。"""
         max_connections = config.server.max_connections
         if self.active_connections >= max_connections:
@@ -115,7 +115,7 @@ class FunASRServer:
 
         self.active_connections += 1
         try:
-            await ws_handler.handle_connection(websocket, *args)
+            await ws_handler.handle_connection(websocket, websocket.path)
         finally:
             self.active_connections -= 1
 
