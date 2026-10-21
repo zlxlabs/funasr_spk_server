@@ -13,6 +13,18 @@ import pytest
 from src.core.config import Qwen3Config, Config
 
 
+@pytest.fixture
+def mock_vendor_llama_native_module(monkeypatch):
+    """Linux 配置单测使用真实 schema，但不加载 macOS 专用 llama 原生库。"""
+    import sys
+    import types
+
+    if sys.platform != "darwin":
+        llama_module = "src.core.vendor.qwen_asr_gguf.inference.llama"
+        monkeypatch.setitem(sys.modules, llama_module, types.ModuleType(llama_module))
+    import src.core.vendor.qwen_asr_gguf.inference.schema
+
+
 class TestAsrEncoderProviderField:
     def test_default_asr_encoder_provider_is_auto(self):
         """默认 auto, 由 build_engine_config 按平台感知"""
@@ -58,7 +70,7 @@ class TestBuildEngineConfigReadsConfigField:
     优先级: 显式参数 > config 字段 (含 env) > 平台感知
     """
 
-    def test_auto_on_macos_resolves_to_coreml_ane_fe(self, monkeypatch):
+    def test_auto_on_macos_resolves_to_coreml_ane_fe(self, monkeypatch, mock_vendor_llama_native_module):
         import sys
         from src.core.qwen3.asr import build_engine_config
 
@@ -67,7 +79,7 @@ class TestBuildEngineConfigReadsConfigField:
         cfg = build_engine_config(model_dir="/tmp/fake")
         assert cfg.onnx_provider == "COREML_ANE_FE"
 
-    def test_config_cpu_overrides_macos_default(self, monkeypatch, tmp_path):
+    def test_config_cpu_overrides_macos_default(self, monkeypatch, tmp_path, mock_vendor_llama_native_module):
         """env FUNASR_QWEN3_ASR_ENCODER_PROVIDER=cpu 应能在 macOS 上一键关掉 ANE"""
         import sys
         from src.core import config as _config_module
@@ -82,7 +94,7 @@ class TestBuildEngineConfigReadsConfigField:
         cfg = build_engine_config(model_dir="/tmp/fake")
         assert cfg.onnx_provider == "CPU"
 
-    def test_config_coreml_on_linux_still_uses_coreml(self, monkeypatch, tmp_path):
+    def test_config_coreml_on_linux_still_uses_coreml(self, monkeypatch, tmp_path, mock_vendor_llama_native_module):
         """linux 用户显式 env=coreml_ane_fe 应能透传 (encoder 自身会 fallback CPU)"""
         import sys
         from src.core import config as _config_module
@@ -96,7 +108,7 @@ class TestBuildEngineConfigReadsConfigField:
         cfg = build_engine_config(model_dir="/tmp/fake")
         assert cfg.onnx_provider == "COREML_ANE_FE"
 
-    def test_explicit_param_beats_config(self, monkeypatch, tmp_path):
+    def test_explicit_param_beats_config(self, monkeypatch, tmp_path, mock_vendor_llama_native_module):
         """显式传 onnx_provider 仍最高优先级, 不被 config 覆盖"""
         import sys
         from src.core import config as _config_module
