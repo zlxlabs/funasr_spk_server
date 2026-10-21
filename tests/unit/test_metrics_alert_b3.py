@@ -4,9 +4,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import sys
 from pathlib import Path
 
+import httpx
 import pytest
 from loguru import logger
 
@@ -23,14 +23,10 @@ _METRICS = (
 
 def _load_metrics_alert():
     """通过脚本入口所在模块加载告警执行器。"""
-    if _MODULE_NAME in sys.modules:
-        return sys.modules[_MODULE_NAME]
     spec = importlib.util.spec_from_file_location(
         _MODULE_NAME, ROOT / "scripts" / "metrics_alert.py"
     )
     module = importlib.util.module_from_spec(spec)
-    sys.modules[_MODULE_NAME] = module
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
 
@@ -59,18 +55,21 @@ class _Client:
     def get(self, url: str, params: dict | None = None):
         self.urls.append((url, params))
         if url.endswith("/health"):
+            if _health_unreachable:
+                raise httpx.ConnectError("unreachable")
             return _Response(200, body={"status": "healthy"})
         return _Response(_metrics_status, text=_METRICS)
 
 
 _clients: list[_Client] = []
 _metrics_status = 200
+_health_unreachable = False
 
 
 @pytest.fixture
 def metrics_alert(monkeypatch, tmp_path):
     """把告警落盘隔离到临时目录，并默认模拟健康服务。"""
-    global _metrics_status
+    global _metrics_status, _health_unreachable
     module = _load_metrics_alert()
     from src.core.config import config
 
@@ -80,6 +79,7 @@ def metrics_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(module.httpx, "Client", _Client)
     _clients.clear()
     _metrics_status = 200
+    _health_unreachable = False
     return module
 
 
@@ -98,9 +98,6 @@ def test_state_write_failure_keeps_previous_state_intact(monkeypatch, metrics_al
         metrics_alert.main([])
 
     assert state_path.read_bytes() == previous
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {
-        "active": {}, "error_total_seen": 3
-    }
 
 
 def test_main_probes_configured_server_address(metrics_alert, monkeypatch):
@@ -111,7 +108,6 @@ def test_main_probes_configured_server_address(metrics_alert, monkeypatch):
     monkeypatch.setattr(config.server, "port", 9876)
 
     assert metrics_alert.main([]) == 0
-    assert _clients
     assert [url for url, _ in _clients[-1].urls] == [
         "http://192.0.2.10:9876/health",
         "http://192.0.2.10:9876/metrics",
@@ -122,8 +118,14 @@ def test_metrics_403_fails_loud_with_unavailable_marker(
     metrics_alert, monkeypatch
 ):
     """公开 main 收到 /metrics 403 时必须非零退出并记录专用错误标记。"""
-    global _metrics_status
+    global _metrics_status, _health_unreachable
+    from unittest.mock import AsyncMock
+
     _metrics_status = 403
+    _health_unreachable = True
+    monkeypatch.setattr(
+        metrics_alert, "send_custom_notification", AsyncMock(return_value=True)
+    )
     records: list[str] = []
     sink_id = logger.add(lambda message: records.append(str(message)), level="ERROR")
     try:

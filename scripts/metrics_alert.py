@@ -90,6 +90,7 @@ def probe_once(base: str, token, timeout: float) -> dict:
     health_ok = False
     health_body = None
     metrics_text = None
+    metrics_status_code = None
     try:
         with httpx.Client(timeout=timeout) as client:
             try:
@@ -105,6 +106,7 @@ def probe_once(base: str, token, timeout: float) -> dict:
             try:
                 params = {"token": token} if token else None
                 r = client.get(base + "/metrics", params=params)
+                metrics_status_code = r.status_code
                 if r.status_code == 200:
                     metrics_text = r.text
                 else:
@@ -114,7 +116,9 @@ def probe_once(base: str, token, timeout: float) -> dict:
     except Exception as exc:  # httpx.Client 构造等极端情况
         logger.error(f"探测异常: {exc}")
 
-    return build_probe(health_ok=health_ok, health_body=health_body, metrics_text=metrics_text)
+    probe = build_probe(health_ok=health_ok, health_body=health_body, metrics_text=metrics_text)
+    probe["metrics_status_code"] = metrics_status_code
+    return probe
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -201,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     base = _scrape_base()
     probe = probe_once(base, obs.metrics_token, timeout=10.0)
     # 整个服务不可达时由 server_down 规则告警；单独的指标端点不可用则必须显式失败。
-    metrics_unavailable = probe["reachable"] and probe["metrics"] is None
+    metrics_unavailable = probe["metrics"] is None and (
+        probe["reachable"] or probe["metrics_status_code"] is not None
+    )
     if metrics_unavailable:
         logger.error("ALERT-METRICS-UNAVAILABLE /metrics 未提供可用指标")
 
