@@ -4,6 +4,13 @@ Unit 测试专属 fixtures。
 仅作用于 tests/unit/（integration 真机路径不受影响——它可能需要 dev .env 里的
 硬件 provider 值，如 FUNASR_QWEN3_ASR_ENCODER_PROVIDER=coreml_ane_full）。
 """
+import os
+
+# 模块级 config 在 pytest 收集时就会读取 .env 并校验；单测默认关闭通知，避免
+# 开发机只配置了开关却没有 webhook 时收集失败。显式环境变量仍优先；python-dotenv
+# 的 load_dotenv 默认 override=False，不会用 .env 覆盖这里或用户显式设置的值。
+os.environ.setdefault("FUNASR_NOTIFICATION_ENABLED", "false")
+
 import pytest
 
 
