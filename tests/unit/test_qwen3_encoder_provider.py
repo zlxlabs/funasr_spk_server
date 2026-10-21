@@ -16,14 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin",
-    reason="需要 macOS 原生 libggml/CoreML",
-)
-
-
 @pytest.fixture
-def fake_ort_module(monkeypatch):
+def fake_ort_module(monkeypatch, mock_vendor_llama_native_module):
     """Mock onnxruntime 以避免真模型加载, 仍允许验证 providers 配置传给 InferenceSession."""
     # 拦截 ort.SessionOptions / ort.GraphOptimizationLevel / ort.InferenceSession
     fake = MagicMock()

@@ -32,3 +32,14 @@ def _hermetic_env(monkeypatch):
     # asr_encoder_provider 的 Pydantic 默认是 "auto"（runtime 感知 sentinel）；dev .env
     # 把它污染成 coreml_ane_full，令 build_engine_config 的平台默认断言误挂。重置回默认。
     monkeypatch.setattr(config_mod.config.qwen3, "asr_encoder_provider", "auto")
+
+
+@pytest.fixture
+def mock_vendor_llama_native_module(monkeypatch):
+    """模拟 encoder provider 的单测隔离 llama 原生初始化，保留真实 encoder 代码。"""
+    import sys
+    import types
+
+    if sys.platform != "darwin":
+        llama_module = "src.core.vendor.qwen_asr_gguf.inference.llama"
+        monkeypatch.setitem(sys.modules, llama_module, types.ModuleType(llama_module))
