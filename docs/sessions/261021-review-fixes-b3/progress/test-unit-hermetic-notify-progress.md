@@ -19,3 +19,8 @@
 - 本段结论：窄回归测试进一步核对子进程收到的初始开关、执行的 conftest 路径 argv、导入后的开关值；移除 setdefault 后断言稳定变红，恢复后将重跑窄测与 unit 全量。
 - 关键决策与已否决方案：保留测试在现有 conftest，不增加文件；断言 producer/consumer 实际子进程 payload，而不是只观察父进程中的变量。
 - 下一步唯一动作：在临时通知开启且无 webhook 的 .env 条件下重跑窄测和全量，随后 scope 检查、提交并推送。
+
+- 当前阶段：主脑验收第 1 轮修正完成，待提交。
+- 本段结论：按反馈删除 tests/unit/conftest.py 中 pytest 不会收集的测试函数；未将其迁移到其他测试文件。`venv/bin/python -m pytest tests/unit -q` 通过（1217 passed、6 skipped）。
+- 关键决策与已否决方案：保留模块顶层通知默认值与注释，其余代码不动；本卡不新增测试。
+- 下一步唯一动作：检查与 origin/main 的指定文件 diff、执行 scope 检查并提交推送修正。
