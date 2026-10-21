@@ -125,13 +125,17 @@ async def test_word_align_real_mms_produces_words(podcast_audio: Path):
     segs_with_words = [s for s in result.segments if s.words]
     assert segs_with_words, "至少一段挂到词"
 
-    # 词归属契约: attach_words_to_segments 按"最大时间重叠"归段, 不承诺词落在段窗内
-    # —— 段边界由 ASR/diarize/silence_align 定, 词边界由 MMS 定, 两者无约束关系
-    # (MMS 常把窗口末尾 token 拉长)。clamp 会篡改测量值, 故锁契约而非锁"包含"。
+    # 词归属契约来自 attach_words_to_segments: 非零时长词按最大正重叠归段；
+    # 零时长词按时间点归入覆盖段的闭区间 [start, end]。段与词时间边界来自不同流程，
+    # 不对齐时不 clamp MMS 测量值；零时长词也不与其他段比较重叠时长。
     for s in segs_with_words:
         for w in s.words:
             assert w.end >= w.start, f"词 {w.text} 时间倒置: {w.start}-{w.end}"
             overlap = min(s.end_time, w.end) - max(s.start_time, w.start)
+            if w.start == w.end:
+                assert s.start_time <= w.start <= s.end_time, \
+                    f"零时长词 {w.text} ({w.start}) 不在所属段 ({s.start_time}-{s.end_time}) 内"
+                continue
             assert overlap > 0, \
                 f"词 {w.text} ({w.start}-{w.end}) 与所属段 ({s.start_time}-{s.end_time}) 无重叠"
             for other in result.segments:
