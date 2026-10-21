@@ -113,7 +113,7 @@ class FileBasedProcessPool:
             status = "运行中" if exit_code is None else f"已退出({exit_code})"
             states.append(f"{idx}[pid={pid},{status}]")
         if states:
-            logger.info(f"{context} | 工作进程状态: {', '.join(states)}")
+            logger.debug(f"{context} | 工作进程状态: {', '.join(states)}")
 
     def _ensure_capacity(self, worker_id: int) -> None:
         """确保 worker 列表扩容到指定索引"""
@@ -394,6 +394,31 @@ class FileBasedProcessPool:
     # ------------------------------------------------------------------
     # 生命周期管理
     # ------------------------------------------------------------------
+    def _remove_stale_run_directories(self) -> None:
+        """只清理有 owner PID 且经 os.kill(pid, 0) 确认属主进程不存在的 run 目录。
+
+        没有 marker、PID 格式错误、权限不足或仍存活的属主均保留；尤其不把
+        run-* 名称本身当作死亡证据，避免误删其他活跃进程池的文件。
+        """
+        for run_dir in self._task_root_dir.glob("run-*"):
+            if not run_dir.is_dir() or run_dir.is_symlink():
+                continue
+            owner_file = run_dir / ".owner_pid"
+            if not owner_file.is_file() or owner_file.is_symlink():
+                continue
+            owner_text = owner_file.read_text(encoding="ascii").strip()
+            if not owner_text.isdecimal():
+                continue
+            owner_pid = int(owner_text)
+            if owner_pid <= 0:
+                continue
+            try:
+                os.kill(owner_pid, 0)
+            except ProcessLookupError:
+                shutil.rmtree(run_dir)
+            except PermissionError:
+                continue
+
     async def initialize(self):
         """初始化进程池 - 启动独立的工作进程"""
         async with self._management_lock:
@@ -404,10 +429,12 @@ class FileBasedProcessPool:
             if self._run_task_dir is not None or self.worker_processes:
                 raise RuntimeError("进程池上次清理未完成，请先完成 cleanup()")
 
+            self._remove_stale_run_directories()
             logger.info(f"启动 {self.pool_size} 个独立工作进程...")
             self._shutdown_requested = False
             self._run_task_dir = self._task_root_dir / f"run-{uuid.uuid4().hex}"
             self._run_task_dir.mkdir(mode=0o700)
+            (self._run_task_dir / ".owner_pid").write_text(str(os.getpid()), encoding="ascii")
             self.task_dir = self._run_task_dir
 
         spawn_tasks: List[asyncio.Task] = []
@@ -585,6 +612,17 @@ class FileBasedProcessPool:
         source_audio_path = Path(audio_path)
         if not source_audio_path.exists():
             raise FileNotFoundError(f"音频文件不存在: {audio_path}")
+
+        options = (extra_task_fields or {}).get("options") or {}
+        terms = options.get("terms", [])
+        if any(
+            0xD800 <= ord(character) <= 0xDFFF
+            for term in terms
+            for character in term
+        ):
+            logger.error("WORKER-TERMS-INVALID: terms 包含不可 UTF-8 编码的代理字符")
+            # task_manager.classify_error 用此既有 marker 将输入格式错误归为不可重试。
+            raise ValueError("参数错误: terms 必须是 UTF-8 可编码文本（不支持的文件格式）")
 
         if not self.is_initialized:
             if self._shutdown_requested:
