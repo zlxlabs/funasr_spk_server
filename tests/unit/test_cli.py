@@ -86,7 +86,8 @@ def test_model_failure_is_nonzero(cli_clone, tmp_path):
     assert b"model deliberately failed" in result.stderr
 
 
-def test_installer_producer(tmp_path):
+@pytest.mark.parametrize("cache", [None, "cache space"])
+def test_installer_producer(tmp_path, cache):
     """截获安装脚本实际调用的 uv 参数和缓存环境，而非 grep 源码。"""
     repo = tmp_path / "repo space"
     (repo / "scripts").mkdir(parents=True)
@@ -99,7 +100,11 @@ def test_installer_producer(tmp_path):
     (tools / "uv").write_text('#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ["CAPTURE"]+"/uv.jsonl", "a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
     (tools / "uv").chmod(0o755)
     env = dict(os.environ, PATH=str(tools) + ":" + os.environ["PATH"],
-               CAPTURE=str(tmp_path), MODELSCOPE_CACHE=str(tmp_path / "cache space"))
+               CAPTURE=str(tmp_path), HOME=str(tmp_path / "home"))
+    env.pop("MODELSCOPE_CACHE", None)
+    expected_cache = str(tmp_path / "home/.cache/funasr-cli/modelscope")
+    if cache:
+        expected_cache = env["MODELSCOPE_CACHE"] = str(tmp_path / cache)
     result = subprocess.run(["bash", repo / "scripts/install_cpu_cli.sh"], env=env, capture_output=True)
     assert result.returncode == 0, result.stderr.decode()
     calls = [json.loads(line) for line in (tmp_path / "uv.jsonl").read_text().splitlines()]
@@ -108,5 +113,5 @@ def test_installer_producer(tmp_path):
                         "--index-url", "https://download.pytorch.org/whl/cpu", "torch==2.8.0", "torchaudio==2.8.0"]
     assert calls[2] == ["pip", "install", "--python", str(repo / ".venv-cpu/bin/python"),
                         "-r", str(repo / "requirements-cpu.txt")]
-    assert (tmp_path / "cache").read_text() == env["MODELSCOPE_CACHE"]
+    assert (tmp_path / "cache").read_text() == expected_cache
     assert (tmp_path / "download").read_text() == "--download-models\n"
