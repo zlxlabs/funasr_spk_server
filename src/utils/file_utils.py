@@ -14,7 +14,6 @@ import ffmpeg
 from pathlib import Path
 from typing import Optional, Tuple, Union
 from loguru import logger
-from src.core.config import config
 
 
 async def calculate_file_hash(file_path: str) -> str:
@@ -38,6 +37,7 @@ def get_file_extension(filename: str) -> str:
 
 def is_allowed_file(filename: str) -> bool:
     """检查文件是否允许上传"""
+    from src.core.config import config
     ext = get_file_extension(filename)
     return ext in config.server.allowed_extensions
 
@@ -76,6 +76,7 @@ def publish_file_atomically(
 
 async def save_uploaded_file(file_data: bytes, filename: str) -> Tuple[str, str]:
     """保存上传的文件"""
+    from src.core.config import config
     # 确保上传目录存在
     Path(config.server.upload_dir).mkdir(parents=True, exist_ok=True)
     
@@ -110,6 +111,7 @@ async def delete_file(file_path: str) -> bool:
 
 def convert_to_wav(input_path: str, output_path: Optional[str] = None) -> str:
     """将音视频文件转换为WAV格式"""
+    from src.core.config import config
     if output_path is None:
         output_path = str(Path(config.server.temp_dir) / f"{Path(input_path).stem}.wav")
     
@@ -206,12 +208,14 @@ def get_audio_duration(file_path: str) -> float:
 
 def validate_file_size(file_size: int) -> bool:
     """验证文件大小"""
+    from src.core.config import config
     max_size = config.server.max_file_size_mb * 1024 * 1024
     return file_size <= max_size
 
 
 async def cleanup_temp_files():
     """清理临时文件"""
+    from src.core.config import config
     temp_dir = Path(config.server.temp_dir)
     if not temp_dir.exists():
         return

@@ -1,0 +1,14 @@
+# CPU torch/torchaudio 由安装脚本从官方 CPU wheel 源安装。
+funasr==1.2.7
+modelscope==1.18.0
+numpy==2.3.3
+pydantic==2.5.3
+aiofiles
+ffmpeg-python
+loguru
+python-dotenv
+# ModelScope 1.18 的导入期依赖。
+addict
+datasets<3
+simplejson
+sortedcontainers
