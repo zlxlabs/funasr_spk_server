@@ -28,6 +28,7 @@ README 只讲「是什么 + 怎么快速跑起来」，详细内容在 `docs/`�
 | 想做什么 | 看这里 |
 |---|---|
 | 📂 文档总索引 | [docs/README.md](docs/README.md) |
+| 🖥️ 单文件本机 CPU 转录（无服务） | [docs/CLI.md](docs/CLI.md) |
 | 🔌 Protocol reference：消费方协议正本（WebSocket 协议 / 上传 / 输出格式 / 异步轮询 / 故障排除；`capabilities` / `terms` / `capability_id`） | [docs/使用/客户端交互指南.md](docs/使用/客户端交互指南.md) |
 | 🚀 部署（Mac 生产 PM2 / Linux CUDA / doctor 验收） | [docs/部署.md](docs/部署.md) |
 | 🧩 服务端实现细节（状态机 / 并发控制 / 消息规格） | [docs/开发/Server-Client 交互协议.md][server-protocol] |

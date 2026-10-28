@@ -15,23 +15,25 @@ from funasr import AutoModel
 from src.models.schemas import TranscribeOptions, TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
 from src.core.device_manager import DeviceManager
-from src.core.config import config as global_config
 from src.utils.torch_utils import release_accelerator_memory
 
 
 class FunASRTranscriber:
     """FunASR转录器 - 支持并发安全的实现"""
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config.json", *, config: Optional[dict] = None):
+        """服务默认沿用全局配置；一次性 CLI 可注入隔离配置，避免服务导入副作用。"""
         self.model = None
         self.model_pool = None
         self.is_initialized = False
-        # 使用全局配置对象，并转换为字典以保持兼容性
-        self.config = self._config_to_dict(global_config)
-        self.cache_dir = global_config.funasr.model_dir
+        if config is None:
+            from src.core.config import config as global_config
+            config = self._config_to_dict(global_config)
+        self.config = config
+        self.cache_dir = config["funasr"]["model_dir"]
 
         # 获取并发模式配置：lock（线程锁）、pool（进程池）或 thread_pool（线程池，已废弃）
-        self.concurrency_mode = global_config.transcription.concurrency_mode
+        self.concurrency_mode = config["transcription"]["concurrency_mode"]
         
         if self.concurrency_mode == "lock":
             # 使用线程锁模式（默认）
@@ -119,7 +121,9 @@ class FunASRTranscriber:
                     ncpu=funasr_config.get("ncpu", 8),
                     device=device,  # 使用设备管理器选定的设备
                     disable_update=funasr_config.get("disable_update", True),
-                    disable_pbar=funasr_config.get("disable_pbar", True)
+                    disable_pbar=funasr_config.get("disable_pbar", True),
+                    **{key: funasr_config[key] for key in
+                       ("vad_kwargs", "punc_kwargs", "spk_kwargs") if key in funasr_config}
                 )
 
                 self.is_initialized = True

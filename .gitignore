@@ -11,6 +11,7 @@ ENV/
 env.bak/
 venv.bak/
 .venv/
+.venv-cpu/
 nul
 
 # 项目相关
